@@ -1,0 +1,9 @@
+torch
+stable-baselines3
+gym
+numpy
+pybullet
+opencv-python
+msgpack-rpc-python
+pyyaml
+airsim

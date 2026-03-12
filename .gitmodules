@@ -1,0 +1,6 @@
+[submodule "simulators/pybullet-drones"]
+	path = simulators/pybullet-drones
+	url = https://github.com/utiasDSL/gym-pybullet-drones.git
+[submodule "simulators/airsim"]
+	path = simulators/airsim
+	url = https://github.com/microsoft/AirSim.git
