@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.eggs/
+dist/
+build/
+Miniconda3-latest-MacOSX-arm64.sh

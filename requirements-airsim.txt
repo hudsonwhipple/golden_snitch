@@ -1,0 +1,3 @@
+# Install after core deps. Use: pip install --no-build-isolation -r requirements-airsim.txt
+msgpack-rpc-python
+airsim

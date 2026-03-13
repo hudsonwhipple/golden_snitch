@@ -1,9 +1,8 @@
+# Core (numpy first for any build-isolation when installing optional packages)
+# pybullet: install separately on Apple Silicon (see scripts/install.sh)
+numpy
 torch
 stable-baselines3
-gym
-numpy
-pybullet
+gymnasium
 opencv-python
-msgpack-rpc-python
 pyyaml
-airsim
