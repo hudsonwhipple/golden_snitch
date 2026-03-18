@@ -1,8 +1,12 @@
-# Core (numpy first for any build-isolation when installing optional packages)
-# pybullet: install separately on Apple Silicon (see scripts/install.sh)
-numpy
-torch
-stable-baselines3
-gymnasium
-opencv-python
-pyyaml
+# Auto-generated from pyproject.toml for Docker compatibility
+numpy>=1.24
+torch>=2.0
+stable-baselines3>=2.1
+gymnasium>=0.29
+scipy>=1.11
+tensorboard>=2.14
+matplotlib>=3.8
+pyyaml>=6.0
+opencv-python>=4.8
+tqdm
+rich

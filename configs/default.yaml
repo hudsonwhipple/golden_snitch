@@ -1,0 +1,84 @@
+seed: 42
+device: "mps"
+
+env:
+  track: "simple_oval"
+  max_episode_steps: 1000
+  physics_hz: 240
+  policy_hz: 48
+  n_envs: 8
+  drone_model: "cf2x"
+  max_velocity: 5.0
+  gate_urdf: "environments/assets/gate.urdf"
+
+reward:
+  gate_bonus: 10.0
+  collision_penalty: -50.0
+  progress_weight: 1.0
+  velocity_weight: 0.3
+  smooth_weight: 0.05
+  time_penalty: -0.01
+  max_velocity: 5.0
+
+expert:
+  n_episodes: 500
+  start_perturbation_pos: 0.5
+  start_perturbation_angle: 5.0
+  output_dir: "outputs/expert_data"
+
+bc:
+  epochs: 50
+  batch_size: 512
+  lr: 1.0e-3
+  lr_schedule: "cosine"
+  validation_split: 0.2
+  hidden_dims: [256, 256]
+  output_dir: "outputs/bc"
+
+ppo:
+  total_timesteps: 5000000
+  n_steps: 2048
+  batch_size: 256
+  n_epochs: 10
+  learning_rate: 3.0e-4
+  lr_schedule: "linear"
+  clip_range: 0.2
+  gamma: 0.99
+  gae_lambda: 0.95
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  checkpoint_freq: 250000
+  eval_freq: 250000
+  eval_episodes: 50
+  policy_kwargs:
+    net_arch: [256, 256]
+    activation_fn: "tanh"
+  output_dir: "outputs/ppo"
+
+curriculum:
+  levels:
+    - name: "single_gate"
+      n_gates: 1
+      max_speed: 2.0
+      obs_noise: false
+    - name: "three_gates"
+      n_gates: 3
+      max_speed: 3.5
+      obs_noise: false
+    - name: "full_track"
+      n_gates: -1
+      max_speed: 5.0
+      obs_noise: false
+    - name: "full_track_noise"
+      n_gates: -1
+      max_speed: 5.0
+      obs_noise: true
+  promotion_threshold: 0.85
+  demotion_threshold: 0.50
+  min_steps_per_level: 500000
+  eval_episodes: 100
+
+wandb:
+  project: "golden-snitch"
+  enabled: true

@@ -1,0 +1,21 @@
+name: simple_oval
+description: "4-gate oval track for basic training"
+start_position: [0.0, 0.0, 1.0]
+start_orientation: [0.0, 0.0, 0.0]
+gates:
+  - id: 0
+    position: [2.0, 0.0, 1.0]
+    orientation: [0.0, 0.0, 0.0]
+    size: [1.0, 1.0]
+  - id: 1
+    position: [3.0, 2.0, 1.0]
+    orientation: [0.0, 0.0, 1.5708]
+    size: [1.0, 1.0]
+  - id: 2
+    position: [1.0, 4.0, 1.0]
+    orientation: [0.0, 0.0, 3.1416]
+    size: [1.0, 1.0]
+  - id: 3
+    position: [0.0, 2.0, 1.0]
+    orientation: [0.0, 0.0, -1.5708]
+    size: [1.0, 1.0]

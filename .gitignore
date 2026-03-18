@@ -6,3 +6,9 @@ __pycache__/
 dist/
 build/
 Miniconda3-latest-MacOSX-arm64.sh
+outputs/
+wandb/
+*.pt
+*.zip
+*.npz
+.DS_Store

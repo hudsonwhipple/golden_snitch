@@ -1,178 +1,187 @@
-# Drone Racing AI
+# Golden Snitch - Autonomous Drone Racing
 
-Research stack for autonomous drone racing.
+A competition-grade autonomous drone racing system using hierarchical reinforcement learning. Designed for both simulated competition and real-world deployment.
 
-**Simulators:** gym-pybullet-drones (PyBullet, default) · AirSim (optional, photorealistic)
+## System Overview
 
----
+Golden Snitch uses a hybrid modular architecture:
 
-## How to use this repo
+- **Learned high-level policy** (PPO) selects racing commands
+- **Classical low-level controller** (PID) handles flight stability
+- **Multi-stage training**: Expert demonstrations → Behavior cloning → RL fine-tuning → Curriculum scaling
 
-**1. One-time setup**
+The system achieves its performance through a carefully designed training pipeline that progresses from imitation to optimization, with curriculum learning to handle increasing difficulty.
 
-```bash
-cd golden_snitch
-bash scripts/install.sh
-```
+## Quick Start
 
-**2. Every time you open a terminal for this project**
-
-```bash
-cd golden_snitch
-source .venv/bin/activate
-```
-
-**3. What you can do**
-
-| Goal | Command |
-|------|---------|
-| **Train a policy** (PPO on the in-repo racing env) | `bash scripts/train.sh` |
-| **Check the env loads** | `bash scripts/launch_pybullet.sh` |
-| **Run tests** | `pytest` |
-| **See the PyBullet visual simulator** | `python scripts/run_pybullet_gui.py` (requires PyBullet installed) |
-| **Use AirSim** (optional) | Install client (see below), start the AirSim binary, then run your script that uses `AirSimRacingEnv` |
-
-Training uses the in-repo `PyBulletRacingEnv` by default. Right now that env is a **stub** (no real physics): it returns zero observations and zero rewards so the policy doesn’t learn anything useful. To get real behavior you can:
-
-- Swap in a gym-pybullet-drones env (if PyBullet installed), or  
-- Implement real physics/observations/rewards in `environments/pybullet_racing_env.py`, or  
-- Use `AirSimRacingEnv` once the AirSim simulator and client are set up.
-
-**4. Where to extend**
-
-- **Envs:** `environments/` — e.g. `pybullet_racing_env.py`, `airsim_racing_env.py`
-- **Training:** `learning/rl_algorithms/train_ppo.py`, `training/configs/ppo_racing.yaml`
-- **Rewards:** `environments/reward_functions/`
-
----
-
-## Setup (one-time)
-
-### 1. Clone and install
+### Setup
 
 ```bash
-git clone --recurse-submodules <repo>
-cd golden_snitch
-bash scripts/install.sh
+git clone <repo-url> && cd golden_snitch
+git submodule update --init --recursive
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
 ```
 
-This creates a `.venv`, installs core deps (torch, stable-baselines3, gymnasium, etc.), and on supported platforms installs PyBullet + the gym-pybullet-drones submodule. On Apple Silicon, PyBullet often has no pip wheel; the script will finish with core only and print optional conda instructions for the full sim.
-
-### 2. Optional: AirSim Python client
-
-To use AirSim environments and scripts:
+Verify installation:
 
 ```bash
-source .venv/bin/activate
-pip install --no-build-isolation -r requirements-airsim.txt
+python -m pytest tests/ -v
 ```
 
-You still need the AirSim binary/simulator for your OS (see [AirSim](https://github.com/microsoft/AirSim)).
+### Train a Policy
 
-### 3. Apple Silicon (M1/M2/M3/M5)
-
-If `install.sh` could not install PyBullet, you can either:
-
-- Use the in-repo **stub** `PyBulletRacingEnv` (no real physics) with the venv, or  
-- Use a conda env for the full gym-pybullet-drones stack (see the message printed by `install.sh`).
-
----
-
-## Running things (every time)
-
-Activate the project venv first so `python` and scripts see the right packages:
-
-```bash
-cd golden_snitch
-source .venv/bin/activate
-```
-
-Then use the sections below.
-
-### PyBullet
-
-**How PyBullet works:** PyBullet is a physics engine with a Python API. It can run in two ways:
-
-- **GUI mode** — `pybullet.connect(pybullet.GUI)` opens a 3D window (OpenGL). You see the scene, run the sim step-by-step, and can interact.
-- **Direct (headless) mode** — no window; useful for training or servers.
-
-**In this repo:** The in-repo `PyBulletRacingEnv` is a **stub** (no PyBullet, no GUI). To actually *see* a visual simulator you need either the script below or the gym-pybullet-drones examples.
-
-**Quick check (no window):** Confirms the stub env loads.
-
-```bash
-bash scripts/launch_pybullet.sh
-```
-
-**Visual simulator (real PyBullet window):** Opens a 3D window with a ground plane and a cube. PyBullet must be installed in the Python you use:
-
-```bash
-python scripts/run_pybullet_gui.py
-```
-
-**Apple Silicon + conda:** If you installed PyBullet with `conda install -c conda-forge pybullet`, it lives in conda’s environment, not in the project `.venv`. So with the venv activated, `python` won’t see it. Use conda’s Python to run the GUI script:
-
-```bash
-conda run -n base python scripts/run_pybullet_gui.py
-```
-
-Or `deactivate` the venv, then `python scripts/run_pybullet_gui.py` (uses conda base). For **drones** in the GUI (quadcopters, tasks), use the gym-pybullet-drones submodule — run their examples from `simulators/pybullet-drones` with an environment where PyBullet is available (conda base or a venv with pybullet).
-
-### AirSim
-
-1. Start the AirSim simulator (binary / Unreal build) and load your environment.
-2. With the venv activated, run your script or client, e.g.:
-
-```bash
-python -c "
-from environments.airsim_racing_env import AirSimRacingEnv
-env = AirSimRacingEnv()
-# ...
-"
-```
-
-To build the AirSim plugin from the submodule:
-
-```bash
-bash scripts/launch_airsim.sh
-```
-
-### Training
-
-With the venv activated:
+Run the full multi-stage pipeline:
 
 ```bash
 bash scripts/train.sh
 ```
 
-Or run the trainer directly:
+Or run stages individually:
 
 ```bash
-python learning/rl_algorithms/train_ppo.py
+# 1. Generate expert demonstrations
+python -m planning.expert_policy --track simple_oval --episodes 500
+
+# 2. Train behavior cloning policy
+python -m learning.training.train_bc --data outputs/expert_data/<run_id>/expert_data.npz
+
+# 3. Fine-tune with PPO
+python -m learning.training.train_ppo --track simple_oval --timesteps 5000000
+
+# 4. Evaluate
+python -m learning.evaluation.evaluate --model outputs/ppo/<run_id>/best_model.zip --track simple_oval
 ```
 
-### Tests
-
-With the venv activated, run the test suite:
+### Evaluate a Policy
 
 ```bash
-pytest
+python -m learning.evaluation.report eval \
+    --model outputs/ppo/<run_id>/best_model.zip \
+    --track simple_oval \
+    --episodes 100 \
+    --output-dir outputs/ppo/<run_id>/eval
 ```
 
-To run a specific file or directory:
+## Project Structure
+
+```
+golden_snitch/
+├── configs/                    # Configuration files
+│   ├── default.yaml           # Master config (all hyperparameters)
+│   └── tracks/                # Race track definitions
+│       ├── simple_oval.yaml   # 4-gate beginner track
+│       ├── figure_eight.yaml  # 6-gate intermediate track
+│       └── competition.yaml   # 8-gate advanced track
+├── control/                   # Flight controllers
+│   └── pid_controller.py      # Cascaded PID with anti-windup
+├── environments/              # Gymnasium environments
+│   ├── racing_env.py          # Primary training env (lightweight dynamics)
+│   ├── quadrotor_dynamics.py  # Pure numpy quadrotor simulation
+│   ├── pybullet_racing_env.py # High-fidelity env (requires pybullet)
+│   ├── gate_detection.py      # Gate passage detection
+│   ├── reward_functions/      # Composite reward system
+│   ├── tracks/                # Track loading utilities
+│   └── wrappers/              # Observation and curriculum wrappers
+├── learning/                  # ML training infrastructure
+│   ├── policies/              # Neural network architectures
+│   │   └── state_policy.py    # MLP racing policy (256x256)
+│   ├── training/              # Training scripts
+│   │   ├── train_bc.py        # Behavior cloning trainer
+│   │   ├── train_ppo.py       # PPO training with checkpoints
+│   │   └── curriculum.py      # Curriculum level manager
+│   ├── evaluation/            # Eval and reporting
+│   │   ├── evaluate.py        # Evaluation harness
+│   │   ├── metrics.py         # Racing metrics computation
+│   │   └── report.py          # Report generation + comparison
+│   └── utils/                 # Model I/O helpers
+├── planning/                  # Classical planning
+│   ├── trajectory_generator.py # Min-jerk spline trajectories
+│   └── expert_policy.py       # Expert data generation
+├── utils/                     # Shared utilities
+│   ├── config.py              # YAML config loader
+│   ├── math_utils.py          # Quaternion/rotation helpers
+│   ├── tracking.py            # W&B + TensorBoard helpers
+│   └── visualization.py       # Matplotlib plot utilities
+├── tests/                     # Unit tests
+├── docs/                      # Documentation
+│   ├── ARCHITECTURE.md        # System architecture details
+│   └── TRAINING_GUIDE.md      # Step-by-step training guide
+├── scripts/                   # Shell scripts
+│   ├── train.sh               # Full pipeline orchestration
+│   └── replay_trajectory.py   # Trajectory visualization
+└── outputs/                   # Training artifacts (gitignored)
+```
+
+## Training Pipeline
+
+```
+Expert Trajectories → Behavior Cloning → PPO Fine-Tuning → Curriculum Learning
+     (Stage 1)           (Stage 2)          (Stage 3)          (Stage 4)
+```
+
+**Stage 1** generates optimal trajectories through gates using minimum-jerk splines tracked by a PD controller.
+
+**Stage 2** trains a neural network to imitate the expert via supervised learning (MSE loss on actions).
+
+**Stage 3** initializes PPO from BC weights and optimizes the policy via reinforcement learning with a composite reward function.
+
+**Stage 4** progressively increases difficulty: single gate → full track → added noise.
+
+## Tracks
+
+| Track | Gates | Description |
+|-------|-------|-------------|
+| simple_oval | 4 | Oval layout, constant altitude |
+| figure_eight | 6 | Crossing paths, altitude changes |
+| competition | 8 | Complex layout with tight turns |
+
+## Configuration
+
+All hyperparameters live in `configs/default.yaml`. Key sections:
+
+- `env`: Track, physics/policy rates, parallel envs
+- `reward`: Gate bonus, collision penalty, component weights
+- `ppo`: Learning rate, batch size, clip range, entropy coefficient
+- `curriculum`: Level definitions, promotion/demotion thresholds
+
+## Compute Requirements
+
+Designed for laptop-class compute (Apple Silicon M5pro):
+
+| Stage | Duration | Memory |
+|-------|----------|--------|
+| Expert data (500 episodes) | ~30 min | 2 GB |
+| Behavior cloning (50 epochs) | ~10 min | 1 GB |
+| PPO (5M steps, 4 envs) | ~2-3 hrs | 4 GB |
+
+## Monitoring
+
+Training metrics are logged to TensorBoard:
 
 ```bash
-pytest path/to/tests/
+tensorboard --logdir outputs/ppo/<run_id>/tb_logs
 ```
 
----
+Optional W&B support:
 
-## Summary
+```bash
+pip install wandb && wandb login
+```
 
-| What              | Command (after `source .venv/bin/activate`)     |
-|-------------------|--------------------------------------------------|
-| PyBullet (check)  | `bash scripts/launch_pybullet.sh`               |
-| PyBullet (GUI)    | `python scripts/run_pybullet_gui.py`            |
-| AirSim            | Start AirSim binary, then run your script       |
-| Training          | `bash scripts/train.sh`                         |
-| Tests             | `pytest`                                        |
+## Tests
+
+```bash
+python -m pytest tests/ -v
+```
+
+Tests cover: gate detection, reward function, PID controller, track loading.
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md) - System design and component breakdown
+- [Training Guide](docs/TRAINING_GUIDE.md) - Detailed training instructions
+
+## License
+
+MIT License - see [LICENSE](LICENSE).

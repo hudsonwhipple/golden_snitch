@@ -1,0 +1,29 @@
+name: figure_eight
+description: "6-gate figure-eight track for intermediate training"
+start_position: [0.0, 0.0, 1.0]
+start_orientation: [0.0, 0.0, 0.0]
+gates:
+  - id: 0
+    position: [2.0, 0.0, 1.0]
+    orientation: [0.0, 0.0, 0.0]
+    size: [1.0, 1.0]
+  - id: 1
+    position: [4.0, 1.5, 1.2]
+    orientation: [0.0, 0.0, 0.7854]
+    size: [1.0, 1.0]
+  - id: 2
+    position: [3.0, 3.0, 1.0]
+    orientation: [0.0, 0.0, 2.3562]
+    size: [1.0, 1.0]
+  - id: 3
+    position: [1.0, 3.0, 0.8]
+    orientation: [0.0, 0.0, 3.1416]
+    size: [1.0, 1.0]
+  - id: 4
+    position: [-1.0, 1.5, 1.2]
+    orientation: [0.0, 0.0, -2.3562]
+    size: [1.0, 1.0]
+  - id: 5
+    position: [0.0, 0.0, 1.0]
+    orientation: [0.0, 0.0, -0.7854]
+    size: [1.0, 1.0]

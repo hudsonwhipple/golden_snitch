@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "golden-snitch"
+version = "0.1.0"
+description = "Autonomous drone racing system with hierarchical RL control"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "torch>=2.0",
+    "stable-baselines3>=2.1",
+    "gymnasium>=0.29",
+    "pybullet>=3.2",
+    "scipy>=1.11",
+    "wandb>=0.16",
+    "tensorboard>=2.14",
+    "matplotlib>=3.8",
+    "pyyaml>=6.0",
+    "opencv-python>=4.8",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pytest-cov"]
+airsim = ["msgpack-rpc-python", "airsim"]
+
+[tool.setuptools.packages.find]
+include = [
+    "configs*",
+    "control*",
+    "environments*",
+    "learning*",
+    "perception*",
+    "planning*",
+    "state_estimation*",
+    "utils*",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
