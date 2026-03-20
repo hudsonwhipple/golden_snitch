@@ -37,8 +37,10 @@ def check_gate_passage(
     """Detect if the drone passed through a gate between two timesteps.
 
     Uses oriented plane intersection with direction validation.
-    The drone must cross the gate plane from the negative to positive side
-    of the gate's forward vector (front-to-back).
+    The drone must cross the gate plane from the approach side (negative dot
+    product with passage_direction) to the exit side (positive dot product).
+    See ``gate_forward_vector`` for the convention: the gate's +X axis points
+    in the intended direction of travel.
 
     Parameters
     ----------
@@ -51,10 +53,12 @@ def check_gate_passage(
     -------
     True if the drone passed through the gate this step
     """
-    normal = gate.forward_vector()
+    passage_dir = gate.forward_vector()
 
-    d_prev = np.dot(prev_pos - gate.position, normal)
-    d_curr = np.dot(curr_pos - gate.position, normal)
+    # Signed distances to the gate plane along the passage direction.
+    # Negative = approach side, Positive = exit side.
+    d_prev = np.dot(prev_pos - gate.position, passage_dir)
+    d_curr = np.dot(curr_pos - gate.position, passage_dir)
 
     crossed_plane = (d_prev <= 0) and (d_curr > 0)
     if not crossed_plane:

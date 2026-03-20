@@ -97,12 +97,9 @@ class CurriculumManager:
         -------
         "promoted", "demoted", or None
         """
+        step_delta = steps - self.state.total_steps
         self.state.total_steps = steps
-        self.state.steps_at_level += steps - (
-            self.state.total_steps - self.state.steps_at_level
-            if self.state.steps_at_level > 0
-            else 0
-        )
+        self.state.steps_at_level += step_delta
 
         if self.state.steps_at_level < self.min_steps_per_level:
             return None

@@ -66,6 +66,7 @@ class GateTracker:
             return gate_relative_pos, False
 
         self._low_confidence_duration += self.dt
+        self._in_recovery = True
 
         if self._last_confident_gate_pos is not None:
             estimated = self._last_confident_gate_pos.copy()
@@ -82,8 +83,8 @@ class GateTracker:
 
     @property
     def recovery_speed_factor(self) -> float:
-        """Speed reduction factor during recovery (1.0 = normal, 0.0 = hover)."""
-        if not self._in_recovery and self._low_confidence_duration == 0:
+        """Speed reduction factor during recovery (1.0 = normal, 0.3 = minimum)."""
+        if not self._in_recovery:
             return 1.0
         t = min(self._low_confidence_duration / self.recovery_timeout, 1.0)
         return max(1.0 - t * 0.7, 0.3)

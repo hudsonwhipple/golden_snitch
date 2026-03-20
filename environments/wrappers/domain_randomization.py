@@ -86,7 +86,7 @@ class PhysicsRandomizationWrapper(gym.Wrapper):
             sim.hover_thrust = params.mass * params.gravity
 
             self._latency_steps = self._rng.integers(*self.config.latency_steps_range)
-            self._action_buffer = [np.zeros(4)] * (self._latency_steps + 1)
+            self._action_buffer = [np.zeros(4) for _ in range(self._latency_steps + 1)]
 
         return obs, info
 

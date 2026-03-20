@@ -71,9 +71,14 @@ def world_to_body(vec_world: np.ndarray, rpy: np.ndarray) -> np.ndarray:
 
 
 def gate_forward_vector(gate_orientation: np.ndarray) -> np.ndarray:
-    """Compute the forward (through) vector of a gate from its Euler orientation.
+    """Return the passage direction of a gate (its local +X axis in world frame).
 
-    Gates face along their local +X axis.
+    Convention: this vector points in the direction a drone should fly THROUGH
+    the gate. The drone approaches from the opposite side (negative dot product
+    with this vector) and exits on the same side (positive dot product).
+
+    Track YAML orientations must be authored so that the gate's +X axis aligns
+    with the intended direction of travel.
     """
     R = euler_to_rotation_matrix(gate_orientation)
     return R[:, 0]
