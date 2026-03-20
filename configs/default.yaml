@@ -12,8 +12,8 @@ env:
   gate_urdf: "environments/assets/gate.urdf"
 
 reward:
-  gate_bonus: 10.0
-  collision_penalty: -50.0
+  gate_bonus: 200.0
+  collision_penalty: -150.0
   progress_weight: 1.0
   velocity_weight: 0.3
   smooth_weight: 0.05
@@ -36,7 +36,7 @@ bc:
   output_dir: "outputs/bc"
 
 ppo:
-  total_timesteps: 5000000
+  total_timesteps: 500000
   n_steps: 2048
   batch_size: 256
   n_epochs: 10

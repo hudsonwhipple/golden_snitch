@@ -9,8 +9,8 @@ import numpy as np
 
 @dataclass
 class RewardConfig:
-    gate_bonus: float = 10.0
-    collision_penalty: float = -50.0
+    gate_bonus: float = 200.0
+    collision_penalty: float = -150.0
     progress_weight: float = 1.0
     velocity_weight: float = 0.3
     smooth_weight: float = 0.05

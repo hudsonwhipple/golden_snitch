@@ -9,6 +9,8 @@ description = "Autonomous drone racing system with hierarchical RL control"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 dependencies = [
+    # TensorBoard still imports pkg_resources; setuptools 82+ removed it.
+    "setuptools>=68,<82",
     "numpy>=1.24",
     "torch>=2.0",
     "stable-baselines3>=2.1",

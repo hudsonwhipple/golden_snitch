@@ -50,7 +50,7 @@ echo ""
 echo "--- Stage 3: PPO Training ---"
 python -m learning.training.train_ppo \
     --track "$TRACK" \
-    --timesteps "${TIMESTEPS:-5000000}" \
+    --timesteps "${TIMESTEPS:-500000}" \
     --n-envs "${N_ENVS:-4}" \
     --seed "$SEED" \
     --device "$DEVICE"

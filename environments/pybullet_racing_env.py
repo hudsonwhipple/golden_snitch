@@ -30,7 +30,7 @@ class PyBulletRacingEnv(BaseAviary, RacingMixin):
     def __init__(
         self,
         track_name: str = "simple_oval",
-        max_velocity: float = 5.0,
+        max_velocity: float = 10.0,
         max_yaw_rate: float = np.pi,
         max_episode_steps: int = 1000,
         reward_cfg: dict | None = None,

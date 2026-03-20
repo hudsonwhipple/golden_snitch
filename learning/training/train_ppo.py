@@ -15,6 +15,7 @@ from stable_baselines3.common.monitor import Monitor
 from environments.racing_env import DroneRacingEnv
 from environments.wrappers.curriculum_wrapper import CurriculumWrapper
 from learning.training.curriculum import CurriculumManager
+from learning.policies.state_policy import RacingMLP
 from learning.utils.model_io import save_ppo_model
 from utils.config import load_config, generate_run_id, save_config
 from utils.tracking import init_wandb, log_metrics, finish_wandb
@@ -134,6 +135,46 @@ class RacingCheckpointCallback(BaseCallback):
                 env = getattr(env, "env", None)
 
 
+def _load_bc_weights_into_ppo(model: PPO, bc_model_path: str) -> None:
+    """Copy BC backbone + action head weights into the SB3 PPO actor network.
+
+    RacingMLP backbone: [Linear(24,256), LayerNorm, Tanh, Linear(256,256), LayerNorm, Tanh]
+    SB3 MlpPolicy actor mlp_extractor: [Linear(24,256), Tanh, Linear(256,256), Tanh]
+    action_net: Linear(256, 4)
+
+    We copy only the Linear weight/bias tensors, skipping LayerNorm since SB3's
+    policy doesn't have them. The value network is left with its default init.
+    """
+    bc = RacingMLP()
+    state_dict = torch.load(bc_model_path, map_location="cpu", weights_only=True)
+    bc.load_state_dict(state_dict)
+
+    # Extract Linear layers from BC backbone (indices 0 and 3 in the Sequential)
+    bc_linears = [m for m in bc.backbone if isinstance(m, torch.nn.Linear)]
+
+    policy = model.policy
+    # SB3 stores the shared MLP extractor layers in policy.mlp_extractor.policy_net
+    ppo_linears = [m for m in policy.mlp_extractor.policy_net if isinstance(m, torch.nn.Linear)]
+
+    if len(bc_linears) != len(ppo_linears):
+        print(f"  Warning: BC has {len(bc_linears)} linear layers but PPO actor has "
+              f"{len(ppo_linears)}. Skipping BC weight transfer.")
+        return
+
+    with torch.no_grad():
+        for bc_layer, ppo_layer in zip(bc_linears, ppo_linears):
+            if bc_layer.weight.shape == ppo_layer.weight.shape:
+                ppo_layer.weight.copy_(bc_layer.weight)
+                ppo_layer.bias.copy_(bc_layer.bias)
+
+        # Copy action head into policy.action_net
+        if policy.action_net.weight.shape == bc.action_head.weight.shape:
+            policy.action_net.weight.copy_(bc.action_head.weight)
+            policy.action_net.bias.copy_(bc.action_head.bias)
+
+    print(f"  BC weights loaded from {bc_model_path}")
+
+
 def train_ppo(
     track_name: str = "simple_oval",
     bc_model_path: str | None = None,
@@ -229,6 +270,9 @@ def train_ppo(
             device=device,
             tensorboard_log=str(save_dir / "tb_logs"),
         )
+
+        if bc_model_path:
+            _load_bc_weights_into_ppo(model, bc_model_path)
 
     callback = RacingCheckpointCallback(
         save_dir=save_dir,
