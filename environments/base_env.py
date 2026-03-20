@@ -48,7 +48,14 @@ class RacingMixin:
         )
 
     def _get_active_gates(self) -> list[Gate]:
-        """Get the active gates for the current curriculum level."""
+        """Get the active gates for the current curriculum level.
+
+        When a CurriculumWrapper sets ``_active_gate_count``, only the first
+        N gates from the track are used.
+        """
+        n = getattr(self, "_active_gate_count", None)
+        if n is not None and 0 < n < len(self.track.gates):
+            return self.track.gates[:n]
         return self.track.gates
 
     def _get_next_gate(self) -> Gate:

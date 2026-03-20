@@ -13,6 +13,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.monitor import Monitor
 
 from environments.racing_env import DroneRacingEnv
+from environments.wrappers.curriculum_wrapper import CurriculumWrapper
 from learning.training.curriculum import CurriculumManager
 from learning.utils.model_io import save_ppo_model
 from utils.config import load_config, generate_run_id, save_config
@@ -25,6 +26,7 @@ class RacingCheckpointCallback(BaseCallback):
     def __init__(
         self,
         save_dir: Path,
+        track_name: str = "simple_oval",
         checkpoint_freq: int = 250_000,
         eval_freq: int = 250_000,
         eval_episodes: int = 50,
@@ -33,6 +35,7 @@ class RacingCheckpointCallback(BaseCallback):
     ):
         super().__init__(verbose)
         self.save_dir = Path(save_dir)
+        self.track_name = track_name
         self.checkpoint_freq = checkpoint_freq
         self.eval_freq = eval_freq
         self.eval_episodes = eval_episodes
@@ -65,7 +68,7 @@ class RacingCheckpointCallback(BaseCallback):
             print(f"  Checkpoint saved: step {step}")
 
     def _evaluate_and_update(self, step: int) -> None:
-        env = DroneRacingEnv(track_name="simple_oval")
+        env = DroneRacingEnv(track_name=self.track_name)
         gates_passed_list = []
         total_gates_list = []
 
@@ -114,6 +117,21 @@ class RacingCheckpointCallback(BaseCallback):
             if result:
                 print(f"  Curriculum: {result} to level {self.curriculum.level_index} "
                       f"({self.curriculum.current_level.name})")
+                self._apply_curriculum_to_envs()
+
+    def _apply_curriculum_to_envs(self) -> None:
+        """Propagate the current curriculum level to all wrapped training envs."""
+        if not self.curriculum:
+            return
+        level = self.curriculum.current_level
+        vec_env = self.model.get_env()
+        for i in range(vec_env.num_envs):
+            env = vec_env.envs[i]
+            while env is not None:
+                if isinstance(env, CurriculumWrapper):
+                    env.set_level(level)
+                    break
+                env = getattr(env, "env", None)
 
 
 def train_ppo(
@@ -167,19 +185,21 @@ def train_ppo(
         tags=["stage:ppo", f"track:{track_name}"],
     )
 
+    curriculum = None
+    if use_curriculum and cfg:
+        curriculum = CurriculumManager.from_config(cfg)
+
     def make_env(env_seed):
         def _init():
             env = DroneRacingEnv(track_name=track_name, initial_perturbation=0.3)
+            if curriculum is not None:
+                env = CurriculumWrapper(env, level=curriculum.current_level)
             env = Monitor(env)
             env.reset(seed=env_seed)
             return env
         return _init
 
     env = DummyVecEnv([make_env(seed + i) for i in range(n_envs)])
-
-    curriculum = None
-    if use_curriculum and cfg:
-        curriculum = CurriculumManager.from_config(cfg)
 
     policy_kwargs = dict(
         net_arch=[256, 256],
@@ -212,6 +232,7 @@ def train_ppo(
 
     callback = RacingCheckpointCallback(
         save_dir=save_dir,
+        track_name=track_name,
         checkpoint_freq=checkpoint_freq,
         eval_freq=eval_freq,
         eval_episodes=eval_episodes,
