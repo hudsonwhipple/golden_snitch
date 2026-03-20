@@ -100,12 +100,34 @@ class AirSimRacingEnv(gym.Env, RacingMixin):
         action = np.asarray(action, dtype=np.float32).flatten()[:ACT_DIM]
         self.racing_state.step_count += 1
 
-        vx = float(action[0] * self._max_velocity)
-        vy = float(action[1] * self._max_velocity)
-        vz = float(-action[2] * self._max_velocity)
+        # Action convention matches DroneRacingEnv / QuadrotorSim:
+        #   action[0] = thrust_normalized in [-1, 1]
+        #   action[1] = roll_cmd in [-1, 1]  (scaled to max_angle = pi/6)
+        #   action[2] = pitch_cmd in [-1, 1] (scaled to max_angle = pi/6)
+        #   action[3] = yaw_rate_cmd in [-1, 1] (scaled to max_yaw_rate = pi rad/s)
+        thrust_norm = float(action[0])
+        roll_cmd = float(action[1])
+        pitch_cmd = float(action[2])
         yaw_rate = float(action[3] * np.pi)
 
-        self.client.moveByVelocityAsync(vx, vy, vz, duration=1.0 / 48).join()
+        # Convert attitude commands to approximate world-frame velocity targets.
+        # Pitch forward (positive pitch_cmd) → forward velocity.
+        # Roll right (positive roll_cmd) → rightward velocity.
+        # Thrust above hover → climb; below hover → descend.
+        max_angle = np.pi / 6
+        target_roll = roll_cmd * max_angle
+        target_pitch = pitch_cmd * max_angle
+
+        # Approximate horizontal velocity from attitude (small-angle: v ≈ g * angle / omega_n)
+        vx = float(np.sin(target_pitch) * self._max_velocity)
+        vy = float(-np.sin(target_roll) * self._max_velocity)
+        vz = float(thrust_norm * self._max_velocity * 0.5)  # vertical from thrust deviation
+
+        self.client.moveByVelocityAsync(
+            vx, vy, vz,
+            duration=1.0 / 48,
+            yaw_mode=airsim.YawMode(is_rate=True, yaw_or_rate=float(np.degrees(yaw_rate))),
+        ).join()
 
         state = self.client.getMultirotorState()
         pos = np.array([
