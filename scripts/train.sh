@@ -46,11 +46,12 @@ BC_DIR=$(ls -dt outputs/bc/bc_${TRACK}_* | head -1)
 echo "BC model: $BC_DIR"
 echo ""
 
-# Stage 3: PPO Fine-Tuning
+# Stage 3: PPO Fine-Tuning (initialized from BC weights)
 echo "--- Stage 3: PPO Training ---"
 python -m learning.training.train_ppo \
     --track "$TRACK" \
-    --timesteps "${TIMESTEPS:-500000}" \
+    --bc-model "$BC_DIR/best_model.pt" \
+    --timesteps "${TIMESTEPS:-2500000}" \
     --n-envs "${N_ENVS:-4}" \
     --seed "$SEED" \
     --device "$DEVICE"

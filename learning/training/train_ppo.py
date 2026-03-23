@@ -70,33 +70,50 @@ class RacingCheckpointCallback(BaseCallback):
 
     def _evaluate_and_update(self, step: int) -> None:
         env = DroneRacingEnv(track_name=self.track_name)
+        if self.curriculum is not None:
+            env = CurriculumWrapper(env, level=self.curriculum.current_level)
+
+        active_gate_count = self._get_active_gate_count(env)
+
         gates_passed_list = []
-        total_gates_list = []
+        collided_list = []
+        reward_sums = {"gate": [], "progress": [], "velocity": [],
+                       "smoothness": [], "collision": [], "time": []}
 
         for ep in range(self.eval_episodes):
             obs, info = env.reset(seed=1000 + ep)
             done = False
+            ep_rewards = {k: 0.0 for k in reward_sums}
             while not done:
                 action, _ = self.model.predict(obs, deterministic=True)
                 obs, reward, terminated, truncated, info = env.step(action)
                 done = terminated or truncated
+                rb = info.get("reward_breakdown", {})
+                for k in ep_rewards:
+                    ep_rewards[k] += rb.get(k, 0.0)
 
             gates_passed_list.append(info.get("gates_passed", 0))
-            total_gates_list.append(len(env.track.gates))
+            collided_list.append(info.get("collided", False))
+            for k in reward_sums:
+                reward_sums[k].append(ep_rewards[k])
 
         env.close()
 
         gate_success = np.mean(
-            [gp / max(tg, 1) for gp, tg in zip(gates_passed_list, total_gates_list)]
+            [gp / max(active_gate_count, 1) for gp in gates_passed_list]
         )
-        crash_rate = np.mean([1 if gp == 0 else 0 for gp in gates_passed_list])
+        crash_rate = np.mean([1.0 if c else 0.0 for c in collided_list])
         avg_gates = np.mean(gates_passed_list)
+
+        mean_rewards = {k: float(np.mean(v)) for k, v in reward_sums.items()}
 
         metrics = {
             "eval/gate_success_rate": gate_success,
             "eval/crash_rate": crash_rate,
             "eval/avg_gates_passed": avg_gates,
         }
+        for k, v in mean_rewards.items():
+            metrics[f"eval/reward_{k}"] = v
         if self.curriculum:
             metrics["eval/curriculum_level"] = self.curriculum.level_index
 
@@ -104,8 +121,10 @@ class RacingCheckpointCallback(BaseCallback):
 
         if self.verbose:
             level_str = f" [Level {self.curriculum.level_index}]" if self.curriculum else ""
+            reward_str = ", ".join(f"R_{k}={v:+.1f}" for k, v in mean_rewards.items())
             print(f"  Eval @ step {step}{level_str}: gate_success={gate_success:.2%}, "
                   f"avg_gates={avg_gates:.1f}, crash_rate={crash_rate:.1%}")
+            print(f"    Rewards: {reward_str}")
 
         if gate_success > self.best_gate_success:
             self.best_gate_success = gate_success
@@ -119,6 +138,15 @@ class RacingCheckpointCallback(BaseCallback):
                 print(f"  Curriculum: {result} to level {self.curriculum.level_index} "
                       f"({self.curriculum.current_level.name})")
                 self._apply_curriculum_to_envs()
+
+    def _get_active_gate_count(self, env) -> int:
+        """Return the number of gates the current curriculum level exposes."""
+        if self.curriculum is not None:
+            n = self.curriculum.current_level.n_gates
+            if n > 0:
+                return n
+        base = env.unwrapped if hasattr(env, "unwrapped") else env
+        return len(base.track.gates)
 
     def _apply_curriculum_to_envs(self) -> None:
         """Propagate the current curriculum level to all wrapped training envs."""
@@ -230,9 +258,15 @@ def train_ppo(
     if use_curriculum and cfg:
         curriculum = CurriculumManager.from_config(cfg)
 
+    reward_cfg = cfg.get("reward", {}) if cfg else {}
+
     def make_env(env_seed):
         def _init():
-            env = DroneRacingEnv(track_name=track_name, initial_perturbation=0.3)
+            env = DroneRacingEnv(
+                track_name=track_name,
+                initial_perturbation=0.3,
+                reward_cfg=reward_cfg if reward_cfg else None,
+            )
             if curriculum is not None:
                 env = CurriculumWrapper(env, level=curriculum.current_level)
             env = Monitor(env)

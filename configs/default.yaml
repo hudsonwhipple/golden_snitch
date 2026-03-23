@@ -36,7 +36,7 @@ bc:
   output_dir: "outputs/bc"
 
 ppo:
-  total_timesteps: 500000
+  total_timesteps: 2500000
   n_steps: 2048
   batch_size: 256
   n_epochs: 10
@@ -74,7 +74,7 @@ curriculum:
       n_gates: -1
       max_speed: 5.0
       obs_noise: true
-  promotion_threshold: 0.85
+  promotion_threshold: 0.75
   demotion_threshold: 0.50
   min_steps_per_level: 500000
   eval_episodes: 100

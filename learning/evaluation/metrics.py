@@ -8,6 +8,36 @@ import numpy as np
 
 
 @dataclass
+class RewardBreakdown:
+    """Cumulative reward components for an episode."""
+
+    gate: float = 0.0
+    progress: float = 0.0
+    velocity: float = 0.0
+    smoothness: float = 0.0
+    collision: float = 0.0
+    time: float = 0.0
+
+    def accumulate(self, step_breakdown: dict) -> None:
+        self.gate += step_breakdown.get("gate", 0.0)
+        self.progress += step_breakdown.get("progress", 0.0)
+        self.velocity += step_breakdown.get("velocity", 0.0)
+        self.smoothness += step_breakdown.get("smoothness", 0.0)
+        self.collision += step_breakdown.get("collision", 0.0)
+        self.time += step_breakdown.get("time", 0.0)
+
+    def to_dict(self) -> dict:
+        return {
+            "gate": self.gate,
+            "progress": self.progress,
+            "velocity": self.velocity,
+            "smoothness": self.smoothness,
+            "collision": self.collision,
+            "time": self.time,
+        }
+
+
+@dataclass
 class EpisodeMetrics:
     """Metrics for a single evaluation episode."""
 
@@ -20,6 +50,8 @@ class EpisodeMetrics:
     positions: list = field(default_factory=list)
     actions: list = field(default_factory=list)
     velocities: list = field(default_factory=list)
+    reward_breakdown: RewardBreakdown = field(default_factory=RewardBreakdown)
+    speeds: list = field(default_factory=list)
 
     @property
     def gate_success_rate(self) -> float:
@@ -39,6 +71,7 @@ class AggregateMetrics:
     lap_time_mean: float = float("inf")
     lap_time_std: float = 0.0
     crash_rate: float = 0.0
+    timeout_rate: float = 0.0
     gate_normalized_time_mean: float = float("inf")
     control_smoothness_mean: float = 0.0
     control_smoothness_std: float = 0.0
@@ -47,6 +80,13 @@ class AggregateMetrics:
     avg_gates_passed: float = 0.0
     n_episodes: int = 0
     n_completed: int = 0
+    n_crashed: int = 0
+    n_timeout: int = 0
+    mean_episode_steps: float = 0.0
+    mean_speed: float = 0.0
+    max_speed: float = 0.0
+    mean_altitude: float = 0.0
+    reward_breakdown_mean: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if not k.startswith("_")}
@@ -95,8 +135,9 @@ def aggregate_metrics(episodes: list[EpisodeMetrics]) -> AggregateMetrics:
         return AggregateMetrics()
 
     gate_rates = [ep.gate_success_rate for ep in episodes]
-    crashes = [1.0 if ep.collided else 0.0 for ep in episodes]
+    crashes = [ep for ep in episodes if ep.collided]
     completed = [ep for ep in episodes if ep.completed_lap]
+    timeouts = [ep for ep in episodes if not ep.collided and not ep.completed_lap]
 
     smoothness_vals = []
     for ep in episodes:
@@ -110,16 +151,40 @@ def aggregate_metrics(episodes: list[EpisodeMetrics]) -> AggregateMetrics:
         if ep.gates_passed > 0 and ep.lap_time < float("inf"):
             gate_norm_times.append(ep.lap_time / ep.gates_passed)
 
+    # Flight statistics
+    all_speeds = []
+    all_altitudes = []
+    for ep in episodes:
+        if ep.speeds:
+            all_speeds.extend(ep.speeds)
+        if ep.positions:
+            all_altitudes.extend([p[2] if len(p) > 2 else 0.0 for p in ep.positions])
+
+    # Reward breakdown averages
+    breakdown_keys = ["gate", "progress", "velocity", "smoothness", "collision", "time"]
+    reward_breakdown_mean = {}
+    for key in breakdown_keys:
+        vals = [getattr(ep.reward_breakdown, key, 0.0) for ep in episodes]
+        reward_breakdown_mean[key] = float(np.mean(vals))
+
     return AggregateMetrics(
         gate_success_rate_mean=float(np.mean(gate_rates)),
         gate_success_rate_std=float(np.std(gate_rates)),
         lap_time_mean=float(np.mean(lap_times)) if lap_times else float("inf"),
         lap_time_std=float(np.std(lap_times)) if lap_times else 0.0,
-        crash_rate=float(np.mean(crashes)),
+        crash_rate=len(crashes) / n,
+        timeout_rate=len(timeouts) / n,
         gate_normalized_time_mean=float(np.mean(gate_norm_times)) if gate_norm_times else float("inf"),
         control_smoothness_mean=float(np.mean(smoothness_vals)) if smoothness_vals else 0.0,
         control_smoothness_std=float(np.std(smoothness_vals)) if smoothness_vals else 0.0,
         avg_gates_passed=float(np.mean([ep.gates_passed for ep in episodes])),
         n_episodes=n,
         n_completed=len(completed),
+        n_crashed=len(crashes),
+        n_timeout=len(timeouts),
+        mean_episode_steps=float(np.mean([ep.steps for ep in episodes])),
+        mean_speed=float(np.mean(all_speeds)) if all_speeds else 0.0,
+        max_speed=float(np.max(all_speeds)) if all_speeds else 0.0,
+        mean_altitude=float(np.mean(all_altitudes)) if all_altitudes else 0.0,
+        reward_breakdown_mean=reward_breakdown_mean,
     )

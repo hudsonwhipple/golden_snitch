@@ -24,7 +24,7 @@ class QuadrotorParams:
     max_thrust: float = 0.6      # N (total, all 4 motors)
     max_torque_xy: float = 0.005 # Nm
     max_torque_z: float = 0.002  # Nm
-    drag_coeff: float = 0.01     # linear drag coefficient
+    drag_coeff: float = 0.5     # linear drag coefficient
 
     def __post_init__(self):
         if self.inertia is None:
@@ -144,7 +144,23 @@ class QuadrotorSim:
         s.velocity = s.velocity + accel * self.dt
         s.position = s.position + s.velocity * self.dt
         s.angular_velocity = s.angular_velocity + ang_accel * self.dt
-        s.orientation = s.orientation + s.angular_velocity * self.dt
+
+        # Euler-rate Jacobian: d(rpy)/dt = T(roll, pitch) @ omega_body
+        # This correctly maps body-frame angular velocity to world-frame Euler rates.
+        roll, pitch = s.orientation[0], s.orientation[1]
+        cr, sr = np.cos(roll), np.sin(roll)
+        cp = np.cos(pitch)
+        # Guard against gimbal lock (pitch near +/- pi/2)
+        cp = np.clip(cp, 1e-6, None) if cp >= 0 else np.clip(cp, None, -1e-6)
+        tp = np.tan(pitch)
+
+        wx, wy, wz = s.angular_velocity
+        euler_rate = np.array([
+            wx + sr * tp * wy + cr * tp * wz,
+            cr * wy - sr * wz,
+            (sr / cp) * wy + (cr / cp) * wz,
+        ])
+        s.orientation = s.orientation + euler_rate * self.dt
 
         s.orientation[0] = np.clip(s.orientation[0], -np.pi / 2, np.pi / 2)
         s.orientation[1] = np.clip(s.orientation[1], -np.pi / 2, np.pi / 2)

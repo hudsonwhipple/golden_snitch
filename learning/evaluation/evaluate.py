@@ -12,6 +12,7 @@ from environments.racing_env import DroneRacingEnv
 from learning.evaluation.metrics import (
     EpisodeMetrics,
     AggregateMetrics,
+    RewardBreakdown,
     aggregate_metrics,
 )
 
@@ -23,6 +24,7 @@ def evaluate_policy(
     max_episode_steps: int = 1000,
     seed: int = 2000,
     deterministic: bool = True,
+    initial_perturbation: float = 0.3,
     record_trajectories: bool = True,
 ) -> tuple[AggregateMetrics, list[EpisodeMetrics]]:
     """Evaluate a trained policy on a racing track.
@@ -34,7 +36,8 @@ def evaluate_policy(
     n_episodes : number of evaluation episodes
     max_episode_steps : max steps per episode
     seed : base random seed
-    deterministic : use deterministic actions
+    deterministic : use deterministic actions (False adds policy stochasticity)
+    initial_perturbation : random start position offset in meters (0 = fixed start)
     record_trajectories : whether to record full position/action histories
 
     Returns
@@ -45,6 +48,7 @@ def evaluate_policy(
     env = DroneRacingEnv(
         track_name=track_name,
         max_episode_steps=max_episode_steps,
+        initial_perturbation=initial_perturbation,
     )
 
     episodes = []
@@ -53,6 +57,7 @@ def evaluate_policy(
     for ep in range(n_episodes):
         obs, info = env.reset(seed=seed + ep)
         ep_metrics = EpisodeMetrics(total_gates=len(env.track.gates))
+        ep_reward_breakdown = RewardBreakdown()
 
         done = False
         step = 0
@@ -64,15 +69,22 @@ def evaluate_policy(
 
             ep_metrics.total_reward += reward
 
+            rb = info.get("reward_breakdown", {})
+            ep_reward_breakdown.accumulate(rb)
+
             if record_trajectories:
-                ep_metrics.positions.append(info.get("position", np.zeros(3)).copy())
-                ep_metrics.velocities.append(info.get("velocity", np.zeros(3)).copy())
+                pos = info.get("position", np.zeros(3)).copy()
+                vel = info.get("velocity", np.zeros(3)).copy()
+                ep_metrics.positions.append(pos)
+                ep_metrics.velocities.append(vel)
                 ep_metrics.actions.append(action.copy())
+                ep_metrics.speeds.append(float(np.linalg.norm(vel)))
 
         ep_metrics.gates_passed = info.get("gates_passed", 0)
         ep_metrics.collided = info.get("collided", False)
         ep_metrics.steps = step
         ep_metrics.lap_time = step * dt if ep_metrics.completed_lap else float("inf")
+        ep_metrics.reward_breakdown = ep_reward_breakdown
 
         episodes.append(ep_metrics)
 
@@ -129,22 +141,45 @@ def save_evaluation_results(
             gates_passed=np.array([ep.gates_passed for ep in episodes]),
         )
 
+    # Save per-episode CSV for detailed analysis
+    csv_path = save_dir / "episode_details.csv"
+    with open(csv_path, "w") as f:
+        f.write("episode,gates_passed,total_gates,steps,total_reward,outcome,"
+                "R_gate,R_progress,R_velocity,R_smoothness,R_collision,R_time\n")
+        for i, ep in enumerate(episodes):
+            outcome = "completed" if ep.completed_lap else ("crashed" if ep.collided else "timeout")
+            rb = ep.reward_breakdown
+            f.write(f"{i},{ep.gates_passed},{ep.total_gates},{ep.steps},"
+                    f"{ep.total_reward:.2f},{outcome},"
+                    f"{rb.gate:.2f},{rb.progress:.2f},{rb.velocity:.2f},"
+                    f"{rb.smoothness:.4f},{rb.collision:.2f},{rb.time:.4f}\n")
+
 
 def print_metrics_table(agg: AggregateMetrics, track_name: str = "") -> None:
     """Pretty-print evaluation metrics."""
     header = f"Evaluation Results{f' - {track_name}' if track_name else ''}"
-    print(f"\n{'=' * 60}")
+    print(f"\n{'=' * 68}")
     print(f"  {header}")
-    print(f"{'=' * 60}")
+    print(f"{'=' * 68}")
     print(f"  Episodes:           {agg.n_episodes}")
     print(f"  Gate Success Rate:  {agg.gate_success_rate_mean:.1%} +/- {agg.gate_success_rate_std:.1%}")
     print(f"  Avg Gates Passed:   {agg.avg_gates_passed:.1f}")
+    print(f"  Completed / Crashed / Timeout: {agg.n_completed} / {agg.n_crashed} / {agg.n_timeout}")
     print(f"  Crash Rate:         {agg.crash_rate:.1%}")
-    print(f"  Completed Laps:     {agg.n_completed}")
+    print(f"  Timeout Rate:       {agg.timeout_rate:.1%}")
     if agg.lap_time_mean < float("inf"):
         print(f"  Lap Time:           {agg.lap_time_mean:.2f}s +/- {agg.lap_time_std:.2f}s")
+    print(f"  Mean Episode Steps: {agg.mean_episode_steps:.1f}")
     print(f"  Control Smoothness: {agg.control_smoothness_mean:.4f} +/- {agg.control_smoothness_std:.4f}")
-    print(f"{'=' * 60}\n")
+    print(f"  Mean Speed:         {agg.mean_speed:.2f} m/s")
+    print(f"  Max Speed:          {agg.max_speed:.2f} m/s")
+    print(f"  Mean Altitude:      {agg.mean_altitude:.2f} m")
+    if agg.reward_breakdown_mean:
+        print(f"  {'─' * 40}")
+        print(f"  Reward Breakdown (mean per episode):")
+        for key, val in agg.reward_breakdown_mean.items():
+            print(f"    R_{key:12s}: {val:+.2f}")
+    print(f"{'=' * 68}\n")
 
 
 if __name__ == "__main__":
@@ -156,6 +191,10 @@ if __name__ == "__main__":
     parser.add_argument("--episodes", type=int, default=100)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--seed", type=int, default=2000)
+    parser.add_argument("--stochastic", action="store_true",
+                        help="Use stochastic (non-deterministic) actions")
+    parser.add_argument("--perturbation", type=float, default=0.3,
+                        help="Random start position offset in meters (0 = fixed start)")
     args = parser.parse_args()
 
     agg, episodes = evaluate_policy(
@@ -163,6 +202,8 @@ if __name__ == "__main__":
         track_name=args.track,
         n_episodes=args.episodes,
         seed=args.seed,
+        deterministic=not args.stochastic,
+        initial_perturbation=args.perturbation,
     )
     print_metrics_table(agg, args.track)
 

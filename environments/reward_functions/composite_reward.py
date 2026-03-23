@@ -66,21 +66,23 @@ class CompositeReward:
         # Gate passage (sparse)
         info.gate = self.cfg.gate_bonus if gate_passed else 0.0
 
-        # Progress toward next gate (dense)
+        # Progress toward next gate (dense, clipped to [-1, 1])
         d_prev = np.linalg.norm(prev_drone_pos - gate_pos)
         d_curr = np.linalg.norm(drone_pos - gate_pos)
         if d_prev > 1e-6:
-            info.progress = self.cfg.progress_weight * (d_prev - d_curr) / d_prev
+            raw_progress = (d_prev - d_curr) / d_prev
+            info.progress = self.cfg.progress_weight * float(np.clip(raw_progress, -1.0, 1.0))
         else:
             info.progress = 0.0
 
-        # Velocity along gate direction
+        # Velocity along gate direction (clipped to [-1, 1])
         gate_dir = gate_pos - drone_pos
         gate_dist = np.linalg.norm(gate_dir)
         if gate_dist > 1e-6:
             gate_dir_norm = gate_dir / gate_dist
             speed_toward = np.dot(drone_vel, gate_dir_norm)
-            info.velocity = self.cfg.velocity_weight * speed_toward / self.cfg.max_velocity
+            raw_vel = speed_toward / self.cfg.max_velocity
+            info.velocity = self.cfg.velocity_weight * float(np.clip(raw_vel, -1.0, 1.0))
         else:
             info.velocity = 0.0
 
