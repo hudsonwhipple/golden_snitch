@@ -14,6 +14,7 @@ from stable_baselines3.common.monitor import Monitor
 
 from environments.racing_env import DroneRacingEnv
 from environments.wrappers.curriculum_wrapper import CurriculumWrapper
+from environments.wrappers.domain_randomization import PhysicsRandomizationWrapper, SensorNoiseWrapper
 from learning.training.curriculum import CurriculumManager
 from learning.policies.state_policy import RacingMLP
 from learning.utils.model_io import save_ppo_model
@@ -225,6 +226,8 @@ def train_ppo(
     seed: int = 42,
     use_curriculum: bool = True,
     resume_from: str | None = None,
+    curriculum_state_path: str | None = None,
+    domain_randomization: bool = True,
     cfg: dict | None = None,
     device: str = "cpu",
 ) -> Path:
@@ -257,6 +260,10 @@ def train_ppo(
     curriculum = None
     if use_curriculum and cfg:
         curriculum = CurriculumManager.from_config(cfg)
+        if curriculum_state_path and Path(curriculum_state_path).exists():
+            curriculum.load(curriculum_state_path)
+            print(f"Curriculum state restored from {curriculum_state_path} "
+                  f"(level {curriculum.level_index}: {curriculum.current_level.name})")
 
     reward_cfg = cfg.get("reward", {}) if cfg else {}
 
@@ -269,6 +276,9 @@ def train_ppo(
             )
             if curriculum is not None:
                 env = CurriculumWrapper(env, level=curriculum.current_level)
+            if domain_randomization:
+                env = PhysicsRandomizationWrapper(env)
+                env = SensorNoiseWrapper(env)
             env = Monitor(env)
             env.reset(seed=env_seed)
             return env
@@ -320,6 +330,7 @@ def train_ppo(
     save_config(cfg or {}, save_dir / "training_config.yaml")
 
     print(f"Starting PPO training: {total_timesteps} steps, {n_envs} envs")
+    print(f"Domain randomization: {'enabled' if domain_randomization else 'disabled'}")
     print(f"Output: {save_dir}")
 
     model.learn(
@@ -353,7 +364,9 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--resume", default=None, help="Checkpoint path to resume from")
+    parser.add_argument("--curriculum-state", default=None, help="Path to curriculum JSON to restore")
     parser.add_argument("--no-curriculum", action="store_true")
+    parser.add_argument("--no-domain-rand", action="store_true", help="Disable physics/sensor domain randomization")
     args = parser.parse_args()
 
     cfg = load_config()
@@ -366,6 +379,8 @@ if __name__ == "__main__":
         seed=args.seed,
         device=args.device,
         resume_from=args.resume,
+        curriculum_state_path=args.curriculum_state,
         use_curriculum=not args.no_curriculum,
+        domain_randomization=not args.no_domain_rand,
         cfg=cfg,
     )

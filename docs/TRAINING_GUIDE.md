@@ -25,11 +25,48 @@ Run the full pipeline in one command:
 bash scripts/train.sh
 ```
 
-Override defaults with environment variables:
+Override defaults with environment variables or flags:
 
 ```bash
 TRACK=figure_eight TIMESTEPS=1000000 N_ENVS=4 SEED=42 bash scripts/train.sh
+
+# Resume from a previously saved model
+bash scripts/train.sh --model simple_oval_20260320_162152
+
+# Skip expert generation and BC (reuse existing outputs)
+bash scripts/train.sh --skip-expert --skip-bc
+
+# Disable domain randomization
+bash scripts/train.sh --no-domain-rand
 ```
+
+Run `bash scripts/train.sh --help` for a full list of flags.
+
+## Resuming Training
+
+Every completed run automatically saves its best model to `saved_models/`:
+
+```
+saved_models/
+├── simple_oval_20260320_162152.zip
+├── simple_oval_20260320_162152_curriculum.json
+└── ...
+```
+
+To continue training from a saved model:
+
+```bash
+# Resume (skips expert + BC automatically, picks up curriculum level)
+bash scripts/train.sh --model simple_oval_20260320_162152
+
+# Resume and save the result under a new name
+bash scripts/train.sh --model simple_oval_20260320_162152 --model-name simple_oval_v2
+
+# List available saved models
+ls saved_models/*.zip
+```
+
+The curriculum state is restored automatically when a matching `<name>_curriculum.json` exists alongside the model, so training continues from the correct difficulty level.
 
 ## Stage-by-Stage Training
 
@@ -91,9 +128,17 @@ python -m learning.training.train_ppo \
 Output: `outputs/ppo/ppo_simple_oval_<timestamp>/`
 
 **Key flags:**
-- `--bc-model`: Path to BC model for weight initialization (optional)
-- `--resume`: Path to checkpoint to resume training
+- `--bc-model <path>`: Path to BC model for weight initialization (optional)
+- `--resume <path>`: Path to a `.zip` checkpoint to resume training from
+- `--curriculum-state <path>`: Path to a curriculum JSON to restore difficulty level
 - `--no-curriculum`: Disable curriculum learning
+- `--no-domain-rand`: Disable physics and sensor domain randomization
+
+**Domain randomization** is enabled by default during PPO training. At each episode reset, the environment randomly perturbs:
+- **Physics**: mass (±15%), drag (±20%), inertia (±10%), max thrust (±10%), action latency (0–2 steps)
+- **Sensors**: position noise (σ=0.02 m), velocity noise (σ=0.05 m/s), orientation noise (σ=0.5°)
+
+This prevents the policy from overfitting to a single set of dynamics and improves robustness. Use `--no-domain-rand` only for debugging or ablation studies.
 
 **What to check (via TensorBoard):**
 ```bash
@@ -171,6 +216,11 @@ The most impactful parameters to tune:
 ## Artifact Structure
 
 ```
+saved_models/                        # Named checkpoints for resuming (gitignored)
+├── simple_oval_20260320_162152.zip
+├── simple_oval_20260320_162152_curriculum.json
+└── ...
+
 outputs/
 ├── expert_data/
 │   └── expert_simple_oval_<ts>/

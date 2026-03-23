@@ -37,7 +37,49 @@ Run the full multi-stage pipeline:
 bash scripts/train.sh
 ```
 
-Or run stages individually:
+Override track, device, or timesteps:
+
+```bash
+TRACK=figure_eight TIMESTEPS=5000000 DEVICE=mps bash scripts/train.sh
+```
+
+#### Train Script Flags
+
+| Flag | Description |
+|------|-------------|
+| `--model <name>` | Resume PPO from `saved_models/<name>.zip` (implies `--skip-expert --skip-bc`) |
+| `--model-name <name>` | Name to save the resulting model as (default: `<track>_<timestamp>`) |
+| `--skip-expert` | Skip Stage 1, reuse latest existing expert data |
+| `--skip-bc` | Skip Stage 2, reuse latest existing BC model |
+| `--no-domain-rand` | Disable physics and sensor domain randomization during PPO training |
+| `--track <name>` | Track name (default: `simple_oval`) |
+| `--seed <int>` | Random seed (default: `42`) |
+| `--device <str>` | Torch device: `cpu`, `mps`, or `cuda` (default: `cpu`) |
+
+#### Resume Training
+
+Each completed run saves its best model to `saved_models/`. To continue training from a previous run:
+
+```bash
+# Resume from a saved model (skips expert + BC automatically)
+bash scripts/train.sh --model simple_oval_20260320_162152
+
+# Resume with a custom name for the new checkpoint
+bash scripts/train.sh --model simple_oval_20260320_162152 --model-name simple_oval_v2
+
+# List available saved models
+ls saved_models/*.zip
+```
+
+#### Skip Upstream Stages
+
+If expert data and a BC model already exist, skip the expensive first two stages:
+
+```bash
+bash scripts/train.sh --skip-expert --skip-bc
+```
+
+#### Run Stages Individually
 
 ```bash
 # 1. Generate expert demonstrations
@@ -47,10 +89,20 @@ python -m planning.expert_policy --track simple_oval --episodes 500
 python -m learning.training.train_bc --data outputs/expert_data/<run_id>/expert_data.npz
 
 # 3. Fine-tune with PPO
-python -m learning.training.train_ppo --track simple_oval --timesteps 5000000
+python -m learning.training.train_ppo \
+    --track simple_oval \
+    --timesteps 5000000 \
+    --bc-model outputs/bc/<run_id>/best_model.pt \
+    --resume saved_models/<name>.zip \          # optional: resume from checkpoint
+    --curriculum-state saved_models/<name>_curriculum.json \  # optional: restore curriculum
+    --no-domain-rand                            # optional: disable domain randomization
 
 # 4. Evaluate
-python -m learning.evaluation.evaluate --model outputs/ppo/<run_id>/best_model.zip --track simple_oval
+python -m learning.evaluation.report eval \
+    --model outputs/ppo/<run_id>/best_model.zip \
+    --track simple_oval \
+    --episodes 100 \
+    --output-dir outputs/ppo/<run_id>/eval
 ```
 
 ### Evaluate a Policy
@@ -110,6 +162,7 @@ golden_snitch/
 ├── scripts/                   # Shell scripts
 │   ├── train.sh               # Full pipeline orchestration
 │   └── replay_trajectory.py   # Trajectory visualization
+├── saved_models/              # Named model checkpoints for resuming (gitignored)
 └── outputs/                   # Training artifacts (gitignored)
 ```
 

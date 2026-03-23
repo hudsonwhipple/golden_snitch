@@ -7,6 +7,7 @@ dist/
 build/
 Miniconda3-latest-MacOSX-arm64.sh
 outputs/
+saved_models/
 wandb/
 *.pt
 *.zip
