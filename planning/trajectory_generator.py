@@ -28,6 +28,7 @@ def generate_min_jerk_trajectory(
     -------
     positions : (T, 3) sampled positions along trajectory
     velocities : (T, 3) sampled velocities
+    accelerations : (T, 3) sampled accelerations, for controller feedforward
     timestamps : (T,) time values
     """
     n_waypoints = len(waypoints)
@@ -54,8 +55,9 @@ def generate_min_jerk_trajectory(
 
     positions = np.column_stack([cs_x(timestamps), cs_y(timestamps), cs_z(timestamps)])
     velocities = np.column_stack([cs_x(timestamps, 1), cs_y(timestamps, 1), cs_z(timestamps, 1)])
+    accelerations = np.column_stack([cs_x(timestamps, 2), cs_y(timestamps, 2), cs_z(timestamps, 2)])
 
-    return positions, velocities, timestamps
+    return positions, velocities, accelerations, timestamps
 
 
 def generate_racing_trajectory(
@@ -81,7 +83,7 @@ def generate_racing_trajectory(
 
     Returns
     -------
-    positions, velocities, timestamps
+    positions, velocities, accelerations, timestamps
     """
     waypoints = [start_position.copy()]
 
