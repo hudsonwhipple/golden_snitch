@@ -10,9 +10,23 @@ from environments.base_env import OBS_DIM, ACT_DIM
 
 
 class RacingMLP(nn.Module):
-    """Two-layer MLP with tanh activation and LayerNorm for racing control.
+    """Two-layer tanh MLP for racing control.
 
-    Used both as a standalone BC policy and to initialize SB3 PPO weights.
+    Used both as a standalone BC policy and to initialize SB3 PPO weights, so the
+    architecture deliberately mirrors SB3's ``MlpPolicy`` with
+    ``net_arch=[256, 256], activation_fn=Tanh``:
+
+        mlp_extractor.policy_net : Linear -> Tanh -> Linear -> Tanh
+        action_net               : Linear(hidden, act_dim)
+
+    Two things follow from that and must not be "improved" independently:
+
+    - **No LayerNorm.** SB3's extractor has none, and LayerNorm re-normalizes activations
+      at run time, so weights trained with it produce entirely different outputs once
+      transplanted into a network without it.
+    - **No output squashing.** SB3 uses ``action_net`` output directly as the mean of a
+      diagonal Gaussian (``squash_output=False``), so BC must regress the action itself
+      rather than a pre-tanh logit. Targets are already in [-1, 1]; ``predict`` clips.
     """
 
     def __init__(
@@ -29,7 +43,6 @@ class RacingMLP(nn.Module):
         for h_dim in hidden_dims:
             layers.extend([
                 nn.Linear(in_dim, h_dim),
-                nn.LayerNorm(h_dim),
                 nn.Tanh(),
             ])
             in_dim = h_dim
@@ -46,8 +59,7 @@ class RacingMLP(nn.Module):
         nn.init.orthogonal_(self.action_head.weight, gain=0.01)
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
-        features = self.backbone(obs)
-        return torch.tanh(self.action_head(features))
+        return self.action_head(self.backbone(obs))
 
     def predict(self, obs: np.ndarray) -> np.ndarray:
         """Inference helper for evaluation loops."""
@@ -55,5 +67,5 @@ class RacingMLP(nn.Module):
             obs_t = torch.as_tensor(obs, dtype=torch.float32)
             if obs_t.dim() == 1:
                 obs_t = obs_t.unsqueeze(0)
-            action = self.forward(obs_t)
+            action = self.forward(obs_t).clamp(-1.0, 1.0)
             return action.squeeze(0).cpu().numpy()
