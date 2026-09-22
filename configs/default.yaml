@@ -46,9 +46,18 @@ ppo:
   clip_range: 0.2
   gamma: 0.99
   gae_lambda: 0.95
-  ent_coef: 0.01
+  ent_coef: 0.001
   vf_coef: 0.5
   max_grad_norm: 0.5
+  # Off deliberately. SB3 shares one optimizer for actor and critic, and its target_kl
+  # check breaks out of the minibatch loop BEFORE optimizer.step(), so early-stopping on
+  # policy KL discards the value gradient as well. Starting from BC weights the policy is
+  # already expert-level while the value head is random, so KL is high from the first
+  # update and the critic gets starved: with target_kl=0.02 explained_variance stayed
+  # ~0.00 for 115k steps (against 0.95 by 100k without it), advantages were noise, and
+  # ep_rew_mean collapsed 888 -> -70 with a 98% crash rate. The knob is wired if a run
+  # ever needs it; the real fix for a BC init is to warm up the critic first.
+  target_kl: null
   checkpoint_freq: 250000
   eval_freq: 250000
   eval_episodes: 50

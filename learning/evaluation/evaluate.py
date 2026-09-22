@@ -16,6 +16,11 @@ from learning.evaluation.metrics import (
     aggregate_metrics,
 )
 
+# Start-position spread used by every evaluation. Evaluating with a fixed start makes
+# each episode an identical replay of the same trajectory, since the dynamics and a
+# deterministic policy have no other source of variation.
+DEFAULT_EVAL_PERTURBATION = 0.3
+
 
 def evaluate_policy(
     model_path: str,
@@ -24,7 +29,7 @@ def evaluate_policy(
     max_episode_steps: int = 1000,
     seed: int = 2000,
     deterministic: bool = True,
-    initial_perturbation: float = 0.3,
+    initial_perturbation: float = DEFAULT_EVAL_PERTURBATION,
     record_trajectories: bool = True,
 ) -> tuple[AggregateMetrics, list[EpisodeMetrics]]:
     """Evaluate a trained policy on a racing track.

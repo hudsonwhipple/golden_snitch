@@ -15,11 +15,16 @@ from stable_baselines3.common.monitor import Monitor
 from environments.racing_env import DroneRacingEnv
 from environments.wrappers.curriculum_wrapper import CurriculumWrapper
 from environments.wrappers.domain_randomization import PhysicsRandomizationWrapper, SensorNoiseWrapper
+from learning.evaluation.evaluate import DEFAULT_EVAL_PERTURBATION
 from learning.training.curriculum import CurriculumManager
 from learning.policies.state_policy import RacingMLP
 from learning.utils.model_io import save_ppo_model
 from utils.config import load_config, generate_run_id, save_config
 from utils.tracking import init_wandb, log_metrics, finish_wandb
+
+# Initial policy sigma when starting from BC weights. SB3's default log_std=0 means
+# sigma=1 on a [-1, 1] action space, which drowns the cloned behaviour immediately.
+BC_INIT_LOG_STD = float(np.log(0.2))
 
 
 class RacingCheckpointCallback(BaseCallback):
@@ -33,6 +38,8 @@ class RacingCheckpointCallback(BaseCallback):
         eval_freq: int = 250_000,
         eval_episodes: int = 50,
         curriculum: CurriculumManager | None = None,
+        reward_cfg: dict | None = None,
+        eval_perturbation: float = DEFAULT_EVAL_PERTURBATION,
         verbose: int = 1,
     ):
         super().__init__(verbose)
@@ -42,6 +49,8 @@ class RacingCheckpointCallback(BaseCallback):
         self.eval_freq = eval_freq
         self.eval_episodes = eval_episodes
         self.curriculum = curriculum
+        self.reward_cfg = reward_cfg or None
+        self.eval_perturbation = eval_perturbation
         self.best_gate_success = -1.0
         self._last_checkpoint_step = 0
         self._last_eval_step = 0
@@ -70,7 +79,16 @@ class RacingCheckpointCallback(BaseCallback):
             print(f"  Checkpoint saved: step {step}")
 
     def _evaluate_and_update(self, step: int) -> None:
-        env = DroneRacingEnv(track_name=self.track_name)
+        # The start perturbation is what makes these episodes differ from one another.
+        # Without it the dynamics, the policy (deterministic=True) and the reset are all
+        # deterministic, so every episode replays one identical trajectory and the
+        # curriculum promotes/demotes on a sample size of one. Reward config must match
+        # training too, or the logged breakdown describes a different reward function.
+        env = DroneRacingEnv(
+            track_name=self.track_name,
+            initial_perturbation=self.eval_perturbation,
+            reward_cfg=self.reward_cfg,
+        )
         if self.curriculum is not None:
             env = CurriculumWrapper(env, level=self.curriculum.current_level)
 
@@ -164,44 +182,128 @@ class RacingCheckpointCallback(BaseCallback):
                 env = getattr(env, "env", None)
 
 
-def _load_bc_weights_into_ppo(model: PPO, bc_model_path: str) -> None:
+def _load_bc_weights_into_ppo(
+    model: PPO, bc_model_path: str, init_log_std: float = BC_INIT_LOG_STD
+) -> None:
     """Copy BC backbone + action head weights into the SB3 PPO actor network.
 
-    RacingMLP backbone: [Linear(24,256), LayerNorm, Tanh, Linear(256,256), LayerNorm, Tanh]
-    SB3 MlpPolicy actor mlp_extractor: [Linear(24,256), Tanh, Linear(256,256), Tanh]
-    action_net: Linear(256, 4)
+    ``RacingMLP`` is deliberately shaped like SB3's actor (see its docstring), so the
+    Linear layers map across one-for-one:
 
-    We copy only the Linear weight/bias tensors, skipping LayerNorm since SB3's
-    policy doesn't have them. The value network is left with its default init.
+        RacingMLP.backbone       -> policy.mlp_extractor.policy_net
+        RacingMLP.action_head    -> policy.action_net
+
+    Two things still have to be reconciled.
+
+    **Observation normalization.** BC trains on ``(obs - mean) / std`` while the PPO env
+    emits raw observations. Rather than making every caller remember to wrap the env, the
+    normalization is folded into the first layer, which is exact::
+
+        W1 @ ((x - mu) / sigma) + b1  ==  (W1 / sigma) @ x + (b1 - W1 @ (mu / sigma))
+
+    **Policy standard deviation.** SB3 initializes ``log_std = 0``, i.e. sigma = 1 on an
+    action space of [-1, 1]. Sampling from that is close to uniform noise and washes the
+    cloned behaviour out within the first rollout, so it is lowered to keep exploration
+    local to what BC learned.
+
+    The value network is left with its default init -- BC has nothing to say about it.
     """
     bc = RacingMLP()
     state_dict = torch.load(bc_model_path, map_location="cpu", weights_only=True)
     bc.load_state_dict(state_dict)
 
-    # Extract Linear layers from BC backbone (indices 0 and 3 in the Sequential)
     bc_linears = [m for m in bc.backbone if isinstance(m, torch.nn.Linear)]
 
     policy = model.policy
-    # SB3 stores the shared MLP extractor layers in policy.mlp_extractor.policy_net
     ppo_linears = [m for m in policy.mlp_extractor.policy_net if isinstance(m, torch.nn.Linear)]
 
     if len(bc_linears) != len(ppo_linears):
-        print(f"  Warning: BC has {len(bc_linears)} linear layers but PPO actor has "
-              f"{len(ppo_linears)}. Skipping BC weight transfer.")
-        return
+        raise ValueError(
+            f"BC backbone has {len(bc_linears)} linear layers but the PPO actor has "
+            f"{len(ppo_linears)}. RacingMLP must mirror the SB3 actor for the transfer "
+            f"to be valid -- check net_arch and RacingMLP.hidden_dims."
+        )
+    for i, (bc_layer, ppo_layer) in enumerate(zip(bc_linears, ppo_linears)):
+        if bc_layer.weight.shape != ppo_layer.weight.shape:
+            raise ValueError(
+                f"BC layer {i} has shape {tuple(bc_layer.weight.shape)} but the PPO actor "
+                f"expects {tuple(ppo_layer.weight.shape)}."
+            )
+    if policy.action_net.weight.shape != bc.action_head.weight.shape:
+        raise ValueError(
+            f"BC action head has shape {tuple(bc.action_head.weight.shape)} but "
+            f"action_net expects {tuple(policy.action_net.weight.shape)}."
+        )
+
+    obs_mean, obs_std = _load_bc_obs_stats(bc_model_path)
 
     with torch.no_grad():
         for bc_layer, ppo_layer in zip(bc_linears, ppo_linears):
-            if bc_layer.weight.shape == ppo_layer.weight.shape:
-                ppo_layer.weight.copy_(bc_layer.weight)
-                ppo_layer.bias.copy_(bc_layer.bias)
+            ppo_layer.weight.copy_(bc_layer.weight)
+            ppo_layer.bias.copy_(bc_layer.bias)
 
-        # Copy action head into policy.action_net
-        if policy.action_net.weight.shape == bc.action_head.weight.shape:
-            policy.action_net.weight.copy_(bc.action_head.weight)
-            policy.action_net.bias.copy_(bc.action_head.bias)
+        policy.action_net.weight.copy_(bc.action_head.weight)
+        policy.action_net.bias.copy_(bc.action_head.bias)
 
-    print(f"  BC weights loaded from {bc_model_path}")
+        if obs_mean is not None:
+            first = ppo_linears[0]
+            # Match the policy's device, not the default one: the policy may be on mps/cuda.
+            mean_t = torch.as_tensor(obs_mean, dtype=first.weight.dtype, device=first.weight.device)
+            std_t = torch.as_tensor(obs_std, dtype=first.weight.dtype, device=first.weight.device)
+            first.bias.sub_(first.weight @ (mean_t / std_t))
+            first.weight.div_(std_t)
+
+        policy.log_std.fill_(init_log_std)
+
+    stats_note = "with obs normalization folded in" if obs_mean is not None else (
+        "WITHOUT obs normalization (no obs_mean.npy/obs_std.npy beside the model)"
+    )
+    print(f"  BC weights loaded from {bc_model_path} ({stats_note}), "
+          f"log_std init {init_log_std:.2f} (sigma={np.exp(init_log_std):.2f})")
+
+
+def _make_lr_schedule(learning_rate: float, schedule: str):
+    """Build the value SB3 wants for ``learning_rate``.
+
+    SB3 accepts a float or a callable of ``progress_remaining`` (1.0 at the start, 0.0 at
+    the end). ``configs/default.yaml`` has declared ``lr_schedule: linear`` since the
+    project started, but a constant float was always passed, so the decay never happened.
+    """
+    if schedule in (None, "", "constant"):
+        return learning_rate
+    if schedule == "linear":
+        return lambda progress_remaining: progress_remaining * learning_rate
+    raise ValueError(f"Unknown lr_schedule {schedule!r}; expected 'linear' or 'constant'.")
+
+
+_ACTIVATIONS = {"tanh": torch.nn.Tanh, "relu": torch.nn.ReLU, "elu": torch.nn.ELU}
+
+
+def _resolve_policy_kwargs(policy_kwargs: dict | None) -> dict:
+    """Turn the config's policy_kwargs into SB3's form (activation_fn as a class).
+
+    ``net_arch`` must stay in step with ``RacingMLP.hidden_dims`` or the BC transfer has
+    nothing to map onto; `_load_bc_weights_into_ppo` raises if they diverge.
+    """
+    resolved = dict(policy_kwargs or {})
+    resolved.setdefault("net_arch", [256, 256])
+    activation = resolved.get("activation_fn", "tanh")
+    if isinstance(activation, str):
+        if activation not in _ACTIVATIONS:
+            raise ValueError(
+                f"Unknown activation_fn {activation!r}; expected one of {sorted(_ACTIVATIONS)}."
+            )
+        resolved["activation_fn"] = _ACTIVATIONS[activation]
+    return resolved
+
+
+def _load_bc_obs_stats(bc_model_path: str) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Load the observation mean/std that ``train_bc`` saved beside the model."""
+    bc_dir = Path(bc_model_path).parent
+    mean_path, std_path = bc_dir / "obs_mean.npy", bc_dir / "obs_std.npy"
+    if not (mean_path.exists() and std_path.exists()):
+        return None, None
+    return np.load(mean_path), np.load(std_path)
 
 
 def train_ppo(
@@ -217,9 +319,12 @@ def train_ppo(
     clip_range: float = 0.2,
     gamma: float = 0.99,
     gae_lambda: float = 0.95,
-    ent_coef: float = 0.01,
+    ent_coef: float = 0.001,
     vf_coef: float = 0.5,
     max_grad_norm: float = 0.5,
+    target_kl: float | None = 0.02,
+    lr_schedule: str = "linear",
+    policy_kwargs: dict | None = None,
     checkpoint_freq: int = 250_000,
     eval_freq: int = 250_000,
     eval_episodes: int = 50,
@@ -286,10 +391,7 @@ def train_ppo(
 
     env = DummyVecEnv([make_env(seed + i) for i in range(n_envs)])
 
-    policy_kwargs = dict(
-        net_arch=[256, 256],
-        activation_fn=torch.nn.Tanh,
-    )
+    policy_kwargs = _resolve_policy_kwargs(policy_kwargs)
 
     if resume_from:
         print(f"Resuming from checkpoint: {resume_from}")
@@ -298,7 +400,7 @@ def train_ppo(
         model = PPO(
             "MlpPolicy",
             env,
-            learning_rate=learning_rate,
+            learning_rate=_make_lr_schedule(learning_rate, lr_schedule),
             n_steps=n_steps,
             batch_size=batch_size,
             n_epochs=n_epochs,
@@ -308,6 +410,7 @@ def train_ppo(
             ent_coef=ent_coef,
             vf_coef=vf_coef,
             max_grad_norm=max_grad_norm,
+            target_kl=target_kl,
             policy_kwargs=policy_kwargs,
             verbose=1,
             seed=seed,
@@ -325,6 +428,7 @@ def train_ppo(
         eval_freq=eval_freq,
         eval_episodes=eval_episodes,
         curriculum=curriculum,
+        reward_cfg=reward_cfg if reward_cfg else None,
     )
 
     save_config(cfg or {}, save_dir / "training_config.yaml")
@@ -346,7 +450,9 @@ def train_ppo(
     finish_wandb()
     env.close()
 
-    print(f"\nPPO training complete. Best gate success: {callback.best_gate_success:.2%}")
+    best = callback.best_gate_success
+    summary = f"{best:.2%}" if best >= 0 else f"n/a (no eval ran; eval_freq={eval_freq})"
+    print(f"\nPPO training complete. Best gate success: {summary}")
     print(f"Models saved to {save_dir}")
 
     return save_dir
@@ -358,11 +464,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train PPO policy for drone racing")
     parser.add_argument("--track", default="simple_oval")
     parser.add_argument("--bc-model", default=None, help="Path to BC model for initialization")
-    parser.add_argument("--output-dir", default="outputs/ppo")
-    parser.add_argument("--timesteps", type=int, default=5_000_000)
-    parser.add_argument("--n-envs", type=int, default=4)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--output-dir", default=None)
+    parser.add_argument("--timesteps", type=int, default=None)
+    parser.add_argument("--n-envs", type=int, default=None)
+    parser.add_argument("--eval-freq", type=int, default=None,
+                        help="steps between curriculum evaluations")
+    parser.add_argument("--checkpoint-freq", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--device", default=None)
     parser.add_argument("--resume", default=None, help="Checkpoint path to resume from")
     parser.add_argument("--curriculum-state", default=None, help="Path to curriculum JSON to restore")
     parser.add_argument("--no-curriculum", action="store_true")
@@ -370,14 +479,42 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     cfg = load_config()
+    ppo_cfg = cfg.get("ppo", {})
+    env_cfg = cfg.get("env", {})
+
+    def pick(cli_value, section: dict, key: str, fallback):
+        """CLI flag wins when given, then configs/default.yaml, then the fallback.
+
+        Everything the config declares under `ppo:` and `env:` has to be read here --
+        train_ppo's own parameter defaults used to win silently, so editing the YAML did
+        nothing and tuning experiments looked like the idea had failed.
+        """
+        return cli_value if cli_value is not None else section.get(key, fallback)
+
     train_ppo(
         track_name=args.track,
         bc_model_path=args.bc_model,
-        output_dir=args.output_dir,
-        total_timesteps=args.timesteps,
-        n_envs=args.n_envs,
-        seed=args.seed,
-        device=args.device,
+        output_dir=pick(args.output_dir, ppo_cfg, "output_dir", "outputs/ppo"),
+        total_timesteps=pick(args.timesteps, ppo_cfg, "total_timesteps", 2_500_000),
+        n_envs=pick(args.n_envs, env_cfg, "n_envs", 4),
+        n_steps=ppo_cfg.get("n_steps", 2048),
+        batch_size=ppo_cfg.get("batch_size", 256),
+        n_epochs=ppo_cfg.get("n_epochs", 10),
+        learning_rate=ppo_cfg.get("learning_rate", 3e-4),
+        lr_schedule=ppo_cfg.get("lr_schedule", "linear"),
+        clip_range=ppo_cfg.get("clip_range", 0.2),
+        gamma=ppo_cfg.get("gamma", 0.99),
+        gae_lambda=ppo_cfg.get("gae_lambda", 0.95),
+        ent_coef=ppo_cfg.get("ent_coef", 0.001),
+        vf_coef=ppo_cfg.get("vf_coef", 0.5),
+        max_grad_norm=ppo_cfg.get("max_grad_norm", 0.5),
+        target_kl=ppo_cfg.get("target_kl", 0.02),
+        policy_kwargs=ppo_cfg.get("policy_kwargs"),
+        eval_freq=pick(args.eval_freq, ppo_cfg, "eval_freq", 250_000),
+        checkpoint_freq=pick(args.checkpoint_freq, ppo_cfg, "checkpoint_freq", 250_000),
+        eval_episodes=ppo_cfg.get("eval_episodes", 50),
+        seed=pick(args.seed, cfg, "seed", 42),
+        device=pick(args.device, cfg, "device", "cpu"),
         resume_from=args.resume,
         curriculum_state_path=args.curriculum_state,
         use_curriculum=not args.no_curriculum,
