@@ -11,7 +11,11 @@ import numpy as np
 class RewardConfig:
     gate_bonus: float = 200.0
     collision_penalty: float = -150.0
-    progress_weight: float = 1.0
+    # Per metre closed toward the next gate. Gates are ~2.2 m apart on simple_oval, so
+    # approaching one is worth ~22 against a 200 gate bonus: enough to guide the policy
+    # between gates without competing with actually passing them.
+    progress_weight: float = 10.0
+    progress_clip: float = 1.0
     velocity_weight: float = 0.3
     smooth_weight: float = 0.05
     time_penalty: float = -0.01
@@ -66,16 +70,22 @@ class CompositeReward:
         # Gate passage (sparse)
         info.gate = self.cfg.gate_bonus if gate_passed else 0.0
 
-        # Progress toward next gate (dense, clipped to [-1, 1])
+        # Progress toward the next gate: metres closed this step, so the episode total
+        # telescopes to (start distance - end distance). The previous form divided by
+        # d_prev, which made it a *relative* measure: closing 0.1 m was worth 100x more
+        # at 0.2 m from the gate than at 20 m, so it paid to hover near a gate rather
+        # than fly the track, and a whole perfect approach summed to only ~4 against a
+        # 200 gate bonus. The clip guards against a pathological jump, not normal flight
+        # (at 5 m/s and a 1/48 s policy step a step closes at most ~0.10 m).
         d_prev = np.linalg.norm(prev_drone_pos - gate_pos)
         d_curr = np.linalg.norm(drone_pos - gate_pos)
-        if d_prev > 1e-6:
-            raw_progress = (d_prev - d_curr) / d_prev
-            info.progress = self.cfg.progress_weight * float(np.clip(raw_progress, -1.0, 1.0))
-        else:
-            info.progress = 0.0
+        info.progress = self.cfg.progress_weight * float(
+            np.clip(d_prev - d_curr, -self.cfg.progress_clip, self.cfg.progress_clip)
+        )
 
-        # Velocity along gate direction (clipped to [-1, 1])
+        # Velocity along the gate direction (clipped to [-1, 1]). Note this is close to a
+        # rescaling of the progress term above (progress ~= speed_toward * dt), so the two
+        # add rather than measure different things -- tune them together, not separately.
         gate_dir = gate_pos - drone_pos
         gate_dist = np.linalg.norm(gate_dir)
         if gate_dist > 1e-6:
