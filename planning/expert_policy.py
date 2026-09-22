@@ -17,6 +17,10 @@ from utils.math_utils import gate_forward_vector, normalize_angle
 # How far past the reference trajectory's own duration an episode may run.
 REFERENCE_TIME_MARGIN = 1.25
 
+# Std of the exploration noise added to executed actions during data collection, so the
+# expert is seen recovering from states a cloned policy will actually reach.
+DEFAULT_ACTION_NOISE = 0.1
+
 
 class ExpertController:
     """Trajectory-tracking controller that outputs DroneRacingEnv actions.
@@ -102,6 +106,7 @@ def generate_expert_data(
     n_episodes: int = 500,
     avg_speed: float = 2.0,
     perturbation: float = 0.3,
+    action_noise: float = DEFAULT_ACTION_NOISE,
     output_dir: str = "outputs/expert_data",
     seed: int = 42,
 ) -> Path:
@@ -113,6 +118,13 @@ def generate_expert_data(
     n_episodes : number of demonstration episodes
     avg_speed : target speed for trajectory generation
     perturbation : random perturbation of start position (meters)
+    action_noise : std of the Gaussian noise added to the *executed* action. The
+        recorded label stays the clean expert action, so the dataset gains
+        (off-trajectory state -> corrective action) pairs. Without this the demos
+        only ever show the on-trajectory states reachable from a 0.3 m start
+        offset, a cloned policy's small per-step errors compound with nothing in
+        the data telling it how to recover, and it leaves the demonstrated
+        distribution entirely. See `tasks/lessons.md`.
     output_dir : base output directory
     seed : random seed
 
@@ -189,12 +201,19 @@ def generate_expert_data(
                 current_pos, current_vel, current_yaw, target_pos, target_vel, target_accel
             )
 
+            # Label the visited state with the CLEAN expert action, then execute a noisy
+            # one. The next state is therefore off-trajectory, and the label recorded
+            # there is the expert's correction for it.
             episode_obs.append(obs.copy())
             episode_actions.append(action.copy())
             episode_gate_idx.append(env.racing_state.next_gate_idx)
             episode_ts.append(timestamps[min(t_idx, last)])
 
-            obs, reward, terminated, truncated, info = env.step(action)
+            executed = action
+            if action_noise > 0:
+                executed = np.clip(action + rng.normal(0, action_noise, size=action.shape), -1, 1)
+
+            obs, reward, terminated, truncated, info = env.step(executed)
 
             # truncated fires once every gate is passed; stepping on past that wraps
             # next_gate_idx modulo the gate count and poisons the observations.
@@ -257,6 +276,8 @@ if __name__ == "__main__":
     parser.add_argument("--episodes", type=int, default=500)
     parser.add_argument("--speed", type=float, default=2.0)
     parser.add_argument("--perturbation", type=float, default=0.3)
+    parser.add_argument("--action-noise", type=float, default=DEFAULT_ACTION_NOISE,
+                        help="std of exploration noise on executed actions (labels stay clean)")
     parser.add_argument("--output-dir", default="outputs/expert_data")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -266,6 +287,7 @@ if __name__ == "__main__":
         n_episodes=args.episodes,
         avg_speed=args.speed,
         perturbation=args.perturbation,
+        action_noise=args.action_noise,
         output_dir=args.output_dir,
         seed=args.seed,
     )
