@@ -9,12 +9,25 @@ from typing import Any
 
 import numpy as np
 
+# Observation noise applied on levels that enable it.
+OBS_NOISE_STD = 0.02
+
 
 @dataclass
 class CurriculumLevel:
+    """One rung of the curriculum.
+
+    Difficulty is scaled on *robustness* axes -- how far the start is displaced and how
+    noisy the observations are -- while every level flies the whole track. Progressing on
+    ``n_gates`` instead is a trap: a level that truncates once N gates are passed only
+    ever shows the agent the opening of the track, and its bootstrapped terminal value is
+    read at an observation where ``next_gate_idx`` has wrapped back to gate 0. The
+    mechanism is kept for tracks long enough to need it, but defaults to the full track.
+    """
+
     name: str
-    n_gates: int  # -1 means all gates from track
-    max_speed: float
+    n_gates: int = -1  # -1 means all gates from track
+    start_perturbation: float = 0.3
     obs_noise: bool = False
 
 
@@ -43,10 +56,9 @@ class CurriculumManager:
         eval_episodes: int = 100,
     ):
         self.levels = levels or [
-            CurriculumLevel("single_gate", n_gates=1, max_speed=2.0),
-            CurriculumLevel("three_gates", n_gates=3, max_speed=3.5),
-            CurriculumLevel("full_track", n_gates=-1, max_speed=5.0),
-            CurriculumLevel("full_track_noise", n_gates=-1, max_speed=5.0, obs_noise=True),
+            CurriculumLevel("full_track", start_perturbation=0.3),
+            CurriculumLevel("full_track_wide_start", start_perturbation=0.8),
+            CurriculumLevel("full_track_noise", start_perturbation=0.8, obs_noise=True),
         ]
         self.promotion_threshold = promotion_threshold
         self.demotion_threshold = demotion_threshold
@@ -61,8 +73,8 @@ class CurriculumManager:
         for ldef in curriculum_cfg.get("levels", []):
             levels.append(CurriculumLevel(
                 name=ldef["name"],
-                n_gates=ldef["n_gates"],
-                max_speed=ldef["max_speed"],
+                n_gates=ldef.get("n_gates", -1),
+                start_perturbation=ldef.get("start_perturbation", 0.3),
                 obs_noise=ldef.get("obs_noise", False),
             ))
         return cls(
@@ -137,7 +149,8 @@ class CurriculumManager:
         level = self.current_level
         return {
             "n_active_gates": level.n_gates,
-            "obs_noise_std": 0.02 if level.obs_noise else 0.0,
+            "initial_perturbation": level.start_perturbation,
+            "obs_noise_std": OBS_NOISE_STD if level.obs_noise else 0.0,
         }
 
     def to_dict(self) -> dict:

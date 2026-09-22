@@ -58,27 +58,26 @@ ppo:
   output_dir: "outputs/ppo"
 
 curriculum:
+  # Every level flies the FULL track; difficulty scales on start displacement and
+  # observation noise. Progressing on n_gates truncates the episode once N gates are
+  # passed, which only ever shows the agent the opening of the track.
   levels:
-    - name: "single_gate"
-      n_gates: 1
-      max_speed: 2.0
-      obs_noise: false
-    - name: "three_gates"
-      n_gates: 3
-      max_speed: 3.5
-      obs_noise: false
     - name: "full_track"
-      n_gates: -1
-      max_speed: 5.0
+      start_perturbation: 0.3
+      obs_noise: false
+    - name: "full_track_wide_start"
+      start_perturbation: 0.8
       obs_noise: false
     - name: "full_track_noise"
-      n_gates: -1
-      max_speed: 5.0
+      start_perturbation: 0.8
       obs_noise: true
-  promotion_threshold: 0.75
-  demotion_threshold: 0.50
-  min_steps_per_level: 500000
-  eval_episodes: 100
+  promotion_threshold: 0.90
+  demotion_threshold: 0.60
+  # Keep this a multiple of ppo.eval_freq, so a level boundary lands exactly on an
+  # evaluation. When it was 500000 against an eval_freq of 250000, only every other
+  # eval could promote or demote.
+  min_steps_per_level: 250000
+  eval_episodes: 50
 
 wandb:
   project: "golden-snitch"
