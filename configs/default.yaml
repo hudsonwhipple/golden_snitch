@@ -9,7 +9,6 @@ env:
   n_envs: 8
   drone_model: "cf2x"
   max_velocity: 5.0
-  gate_urdf: "environments/assets/gate.urdf"
 
 reward:
   gate_bonus: 200.0
