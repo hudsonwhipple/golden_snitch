@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-from environments.gate_detection import Gate
+from environments.gate_detection import DEFAULT_FRAME_THICKNESS, Gate
 from utils.config import TRACKS_DIR
 
 
@@ -37,6 +37,9 @@ def load_track(track_name: str, tracks_dir: str | Path | None = None) -> Track:
     ----------
     track_name : name of the track (without .yaml extension)
     tracks_dir : override directory to search for track files
+
+    Gate frame thickness is optional and falls back per gate -> per track -> the default,
+    so existing track files that predate solid gates keep working unchanged.
     """
     tracks_dir = Path(tracks_dir) if tracks_dir else TRACKS_DIR
     path = tracks_dir / f"{track_name}.yaml"
@@ -55,6 +58,9 @@ def load_track(track_name: str, tracks_dir: str | Path | None = None) -> Track:
                 position=np.array(g["position"], dtype=np.float64),
                 orientation=np.array(g["orientation"], dtype=np.float64),
                 size=np.array(g["size"], dtype=np.float64),
+                frame_thickness=float(
+                    g.get("frame_thickness", data.get("frame_thickness", DEFAULT_FRAME_THICKNESS))
+                ),
             )
         )
 
