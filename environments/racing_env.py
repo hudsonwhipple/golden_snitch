@@ -11,7 +11,7 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 
-from environments.base_env import OBS_DIM, ACT_DIM, RacingMixin
+from environments.base_env import OBS_DIM, ACT_DIM, DEFAULT_COLLISION_RADIUS, RacingMixin
 from environments.quadrotor_dynamics import QuadrotorSim, QuadrotorParams
 from environments.gate_detection import compute_gate_relative_position
 from environments.tracks.track_loader import load_track
@@ -36,6 +36,7 @@ class DroneRacingEnv(gym.Env, RacingMixin):
         policy_hz: int = 48,
         initial_perturbation: float = 0.0,
         obs_noise_std: float = 0.0,
+        collision_radius: float = DEFAULT_COLLISION_RADIUS,
         render_mode: str | None = None,
     ):
         super().__init__()
@@ -49,7 +50,7 @@ class DroneRacingEnv(gym.Env, RacingMixin):
         self.render_mode = render_mode
 
         track = load_track(track_name)
-        self._init_racing(track, reward_cfg)
+        self._init_racing(track, reward_cfg, collision_radius=collision_radius)
         self.max_episode_steps = max_episode_steps
 
         self._sim = QuadrotorSim(
@@ -84,6 +85,7 @@ class DroneRacingEnv(gym.Env, RacingMixin):
 
         self._sim.reset(start_pos, start_rpy)
         self.racing_state.prev_pos = start_pos.copy()
+        self._last_collision_cause = None
 
         obs = self._get_obs()
         info = self._get_info()
@@ -100,11 +102,14 @@ class DroneRacingEnv(gym.Env, RacingMixin):
         vel_world = state.velocity
         rpy = state.orientation
 
+        prev_pos = self.racing_state.prev_pos
         gate_passed = False
-        if self.racing_state.prev_pos is not None:
-            gate_passed = self._update_gate_progress(self.racing_state.prev_pos, pos)
+        if prev_pos is not None:
+            gate_passed = self._update_gate_progress(prev_pos, pos)
 
-        collided = self._check_collision(pos)
+        collision_cause = self._check_collision(prev_pos if prev_pos is not None else pos, pos)
+        collided = collision_cause is not None
+        self._last_collision_cause = collision_cause
 
         prev_action = self.racing_state.prev_action
         if prev_action is None:
@@ -139,12 +144,19 @@ class DroneRacingEnv(gym.Env, RacingMixin):
 
         return obs
 
-    def _check_collision(self, pos: np.ndarray) -> bool:
+    def _check_collision(self, prev_pos: np.ndarray, pos: np.ndarray) -> str | None:
+        """Return the cause of a collision this step, or None.
+
+        The cause is surfaced in ``info`` so an evaluation can tell a gate strike from a
+        ground hit; all three carry the same reward penalty.
+        """
         if pos[2] < 0.05:
-            return True
+            return "ground"
         if np.any(np.abs(pos) > 20.0):
-            return True
-        return False
+            return "bounds"
+        if self._check_gate_collision(prev_pos, pos):
+            return "gate_frame"
+        return None
 
     def _check_truncated(self) -> bool:
         if self.racing_state.step_count >= self.max_episode_steps:
@@ -160,6 +172,7 @@ class DroneRacingEnv(gym.Env, RacingMixin):
             "gates_passed": self.racing_state.gates_passed,
             "next_gate_idx": self.racing_state.next_gate_idx,
             "collided": self.racing_state.collided,
+            "collision_cause": getattr(self, "_last_collision_cause", None),
             "gate_passed_this_step": getattr(self, "_last_gate_passed", False),
             "episode_reward": self.racing_state.episode_reward,
             "step_count": self.racing_state.step_count,

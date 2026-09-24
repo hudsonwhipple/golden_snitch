@@ -142,6 +142,10 @@ class AirSimRacingEnv(gym.Env, RacingMixin):
         ])
 
         gate_passed = self._update_gate_progress(self.racing_state.prev_pos, pos)
+        # AirSim reports contact against the scene's real gate meshes, so the geometric
+        # frame check in RacingMixin is deliberately NOT used here -- running both would
+        # double-count a single strike. Enable it only for a scene with no gate collision
+        # geometry, and then only after checking simGetCollisionInfo stays quiet.
         collided = bool(self.client.simGetCollisionInfo().has_collided)
         reward_info = self._compute_racing_reward(pos, vel, action, gate_passed, collided)
 

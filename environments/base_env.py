@@ -6,13 +6,23 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from environments.gate_detection import Gate, check_gate_passage, compute_gate_relative_position
+from environments.gate_detection import (
+    Gate,
+    check_gate_frame_collision,
+    check_gate_passage,
+    compute_gate_relative_position,
+)
 from environments.reward_functions.composite_reward import CompositeReward, RewardConfig, RewardInfo
 from environments.tracks.track_loader import Track
 
 
 OBS_DIM = 24
 ACT_DIM = 4
+
+# Body radius of the drone, used both to shrink a gate's usable aperture and to decide when
+# it has struck the frame. Roughly a Crazyflie 2.x footprint: QuadrotorParams.arm_length is
+# 0.0397 m centre-to-motor, plus propeller clearance.
+DEFAULT_COLLISION_RADIUS = 0.08
 
 
 @dataclass
@@ -34,13 +44,19 @@ class RacingMixin:
     Mixed into concrete environment classes (PyBullet, AirSim, etc.)
     """
 
-    def _init_racing(self, track: Track, reward_cfg: dict | None = None) -> None:
+    def _init_racing(
+        self,
+        track: Track,
+        reward_cfg: dict | None = None,
+        collision_radius: float = DEFAULT_COLLISION_RADIUS,
+    ) -> None:
         self.track = track
         self.reward_fn = CompositeReward(
             RewardConfig(**reward_cfg) if reward_cfg else RewardConfig()
         )
         self.racing_state = RacingState()
         self.max_episode_steps = 1000
+        self.collision_radius = collision_radius
 
     def _reset_racing(self) -> None:
         self.racing_state = RacingState(
@@ -72,11 +88,22 @@ class RacingMixin:
     def _update_gate_progress(self, prev_pos: np.ndarray, curr_pos: np.ndarray) -> bool:
         """Check and update gate passage. Returns True if a gate was passed."""
         gate = self._get_next_gate()
-        passed = check_gate_passage(prev_pos, curr_pos, gate)
+        passed = check_gate_passage(prev_pos, curr_pos, gate, clearance=self.collision_radius)
         if passed:
             self.racing_state.gates_passed += 1
             self.racing_state.next_gate_idx += 1
         return passed
+
+    def _check_gate_collision(self, prev_pos: np.ndarray, curr_pos: np.ndarray) -> bool:
+        """True if the swept segment struck any gate's frame.
+
+        Checked against every gate on the track, not ``_get_active_gates()``: a gate the
+        curriculum has deactivated for scoring is still a solid object in the world.
+        """
+        return any(
+            check_gate_frame_collision(prev_pos, curr_pos, gate, clearance=self.collision_radius)
+            for gate in self.track.gates
+        )
 
     def _compute_racing_reward(
         self,

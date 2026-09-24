@@ -86,27 +86,37 @@ class PyBulletRacingEnv(BaseAviary, RacingMixin):
         from utils.math_utils import euler_to_rotation_matrix
 
         R = euler_to_rotation_matrix(gate.orientation)
-        hw, hh = gate.size[0] / 2, gate.size[1] / 2
 
-        corners_local = np.array([
-            [0, -hw, -hh],
-            [0,  hw, -hh],
-            [0,  hw,  hh],
-            [0, -hw,  hh],
-        ])
-        corners_world = np.array([gate.position + R @ c for c in corners_local])
-
-        color = [1.0, 0.2, 0.2]
-        width = 3.0
-        for i in range(4):
-            j = (i + 1) % 4
-            p.addUserDebugLine(
-                corners_world[i].tolist(),
-                corners_world[j].tolist(),
-                lineColorRGB=color,
-                lineWidth=width,
-                physicsClientId=self.CLIENT,
-            )
+        # Draw both edges of the solid frame, plus the aperture the drone's body can
+        # actually fit through, so what you see matches what _check_collision enforces.
+        radius = self.collision_radius
+        rings = [
+            (gate.size[0] / 2 - radius, gate.size[1] / 2 - radius, [0.2, 1.0, 0.2], 1.0),
+            (gate.size[0] / 2, gate.size[1] / 2, [1.0, 0.2, 0.2], 3.0),
+            (
+                gate.size[0] / 2 + gate.frame_thickness,
+                gate.size[1] / 2 + gate.frame_thickness,
+                [1.0, 0.2, 0.2],
+                3.0,
+            ),
+        ]
+        for hw, hh, color, width in rings:
+            corners_local = np.array([
+                [0, -hw, -hh],
+                [0,  hw, -hh],
+                [0,  hw,  hh],
+                [0, -hw,  hh],
+            ])
+            corners_world = np.array([gate.position + R @ c for c in corners_local])
+            for i in range(4):
+                j = (i + 1) % 4
+                p.addUserDebugLine(
+                    corners_world[i].tolist(),
+                    corners_world[j].tolist(),
+                    lineColorRGB=color,
+                    lineWidth=width,
+                    physicsClientId=self.CLIENT,
+                )
 
         forward = gate.position + R[:, 0] * 0.3
         p.addUserDebugLine(
@@ -171,7 +181,8 @@ class PyBulletRacingEnv(BaseAviary, RacingMixin):
         if self.racing_state.prev_pos is not None:
             gate_passed = self._update_gate_progress(self.racing_state.prev_pos, pos)
 
-        collided = self._check_collision(pos)
+        prev_pos = self.racing_state.prev_pos
+        collided = self._check_collision(prev_pos if prev_pos is not None else pos, pos)
 
         action = self.racing_state.prev_action
         if action is None:
@@ -187,8 +198,8 @@ class PyBulletRacingEnv(BaseAviary, RacingMixin):
 
         return float(reward_info.total)
 
-    def _check_collision(self, pos: np.ndarray) -> bool:
-        """Check for ground collision or out-of-bounds."""
+    def _check_collision(self, prev_pos: np.ndarray, pos: np.ndarray) -> bool:
+        """Check for ground collision, out-of-bounds, or a gate-frame strike."""
         if pos[2] < 0.05:
             return True
         if np.any(np.abs(pos) > 20.0):
@@ -200,7 +211,9 @@ class PyBulletRacingEnv(BaseAviary, RacingMixin):
         )
         if len(contact_points) > 0:
             return True
-        return False
+        # Gates here are debug-line visuals, not rigid bodies, so getContactPoints can never
+        # report a gate strike however bodyB is widened. The geometric check supplies it.
+        return self._check_gate_collision(prev_pos, pos)
 
     def _computeTerminated(self):
         return bool(self.racing_state.collided)
