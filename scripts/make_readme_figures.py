@@ -230,7 +230,7 @@ def make_gif(run: Rollout, track, out, lap_time: float):
     fig, ax = plt.subplots(figsize=(4.8, 5.4), dpi=90)
     draw_gates(ax, track)
     style(ax, "")
-    ax.set_title(f"Retrained policy, one lap ({lap_time:.2f} s)", fontsize=11, loc="left")
+    ax.set_title(f"Retrained policy, a typical lap ({lap_time:.2f} s)", fontsize=11, loc="left")
     trail, = ax.plot([], [], color=AFTER_COLOR, lw=2)
     dot = ax.scatter([pos[0, 0]], [pos[0, 1]], s=60, color=AFTER_COLOR, edgecolor="white", zorder=5)
     clock = ax.text(0.98, 0.02, "", transform=ax.transAxes, ha="right", fontsize=10, color="#555")
@@ -263,7 +263,9 @@ def main():
 
     plot_before_after(before, after, track, s_before, s_after, args.out / "before_after.png")
     plot_gate_offsets(before, after, track, args.out / "gate_offsets.png")
-    lap = next(r for r in after if r.outcome == "completed")
+    # Animate a typical lap: the one closest to the mean lap time, not simply the first.
+    laps = [r for r in after if r.outcome == "completed"]
+    lap = min(laps, key=lambda r: abs(r.steps * POLICY_DT - s_after["mean_lap_time_s"]))
     make_gif(lap, track, args.out / "flight.gif", lap.steps * POLICY_DT)
 
     with thin_gates():
