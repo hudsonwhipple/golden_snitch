@@ -118,3 +118,40 @@ gates -- it currently destroys more capability than it adds.
 Collision only fires on a plane crossing, so a drone grazing the outer edge of a frame while
 travelling parallel to it is not detected. That needs swept-volume contact against the frame
 solid, which the point-mass dynamics do not model. Noted in the docstring.
+
+### Retrain against solid gates (outputs/ppo/ppo_simple_oval_20260924_180410)
+
+Curriculum promoted 0 -> 1 at 250k and 1 -> 2 at 750k, then held level 2 with no demotions.
+
+All on SOLID gates, 100 episodes, perturbation 0.3:
+
+| model | gate success | laps/100 | lap time | collisions |
+|---|---|---|---|---|
+| BC init (0 PPO steps) | 96.2% | 95/100 | 4.68 s | 5 gate strikes |
+| PPO before solid gates | 74.0% | 54/100 | 3.71 s | 46 gate strikes |
+| **PPO retrained on solid gates** | **100.0%** | **100/100** | **3.87 s** | **none** |
+
+Retrained model by curriculum level: full_track 100/100, wide_start 92/100 (8 strikes),
+noise 93/100 (7 strikes).
+
+PPO now beats its own initialization on the honest task -- more reliable *and* 0.8 s faster
+than BC -- which is exactly what the previous run failed to do once measured properly. The
+100/100 here is a real number: same policy, same 100 episodes, gates that can be hit.
+
+Training still oscillates (83.0% -> 98.5% -> 84.0% -> 95.5% across evals), so the underlying
+instability is unchanged: an expert-level policy paired with a randomly initialized value
+head. `best_model` selection caught a good checkpoint again. A critic warm-up remains the
+outstanding fix.
+
+Caveat: this run used `ent_coef=0.001` and `lr_schedule: linear`, which have still never been
+isolated from each other.
+
+### Re-measured for the README (2026-10-16)
+
+`scripts/make_readme_figures.py` re-scores both committed policies on current HEAD, 100 episodes,
+perturbation 0.3, seed 2000. The retrained policy reproduces: 100/100 laps, zero strikes, 3.86 s.
+The pre-solid-gate policy (`models/ppo_before_solid_gates.zip`, the 3.71 s model) reproduces its
+100/100 under the old thin-gate rules, but on solid gates it now scores **67/100 laps with 33 gate
+strikes** (81.5% gate success), not the 54/100 and 46 strikes recorded above. The same numbers
+come out of `learning.evaluation.evaluate_policy`, so the difference is not the figure script.
+The README reports the reproducible figures; the cause of the gap is not yet known.
