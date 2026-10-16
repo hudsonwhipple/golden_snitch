@@ -13,3 +13,5 @@ wandb/
 *.zip
 *.npz
 .DS_Store
+# The two policies the README compares are small and committed on purpose.
+!models/*.zip

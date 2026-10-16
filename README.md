@@ -1,240 +1,124 @@
-# Golden Snitch - Autonomous Drone Racing
+# Golden Snitch: Autonomous Drone Racing with Reinforcement Learning
 
-A competition-grade autonomous drone racing system using hierarchical reinforcement learning. Designed for both simulated competition and real-world deployment.
+A quadrotor racing agent that learns to fly a gate course as fast as possible without crashing. It's trained with imitation learning and PPO, and evaluated by checking what each metric is actually measuring.
 
-## System Overview
+<p align="center">
+  <img src="docs/assets/flight.gif" width="380" alt="Top-down animation of the trained policy flying one lap through four gates">
+</p>
 
-Golden Snitch uses a hybrid modular architecture:
+<p align="center">
+  <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-3776AB">
+  <img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-2.x-EE4C2C">
+  <img alt="Stable-Baselines3" src="https://img.shields.io/badge/Stable--Baselines3-PPO-5C6BC0">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-46%20passing-2e8b57">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-lightgrey">
+</p>
 
-- **Learned high-level policy** (PPO) selects racing commands
-- **Classical low-level controller** (PID) handles flight stability
-- **Multi-stage training**: Expert demonstrations → Behavior cloning → RL fine-tuning → Curriculum scaling
+## Results
 
-The system achieves its performance through a carefully designed training pipeline that progresses from imitation to optimization, with curriculum learning to handle increasing difficulty.
+Each policy was evaluated over the same 100 episodes. Each episode starts from a random point up to 0.3 m from the start position.
 
-## Quick Start
+| Policy | Gate model it was scored on | Laps completed | Gate strikes | Mean lap time |
+|---|---|---|---|---|
+| PPO, trained with thin gates | Thin (original) | 100 / 100 | — | 3.71 s |
+| PPO, trained with thin gates | **Solid frames** | **67 / 100** | **33** | 3.70 s |
+| **PPO, retrained with solid frames** | **Solid frames** | **100 / 100** | **0** | **3.86 s** |
 
-### Setup
+The first policy's perfect score wasn't real. The simulator treated each gate as an infinitely thin window, so the policy learned to cut corners by clipping gate edges it couldn't hit. Once I made the gate frames solid, a third of its laps ended in a crash. After I retrained it against solid gates, it completes every lap with zero strikes, about 0.15 s slower per lap. The section [Validating the result](#validating-the-result) explains how I found this.
+
+Every number above comes from one command, using the two policies committed in [`models/`](models):
 
 ```bash
-git clone <repo-url> && cd golden_snitch
-git submodule update --init --recursive
+python scripts/make_readme_figures.py   # writes docs/assets/results.json and the figures below
+```
+
+## The problem
+
+- **Task:** fly a simulated quadrotor through a 4-gate course in order, as fast as possible.
+- **Observation:** a 24-dimensional state vector: the drone's position, velocity, attitude and angular velocity, its previous action, the next gate's and the following gate's positions relative to the drone (in each gate's frame), distance to the next gate, and lap progress.
+- **Action:** collective thrust, roll angle, pitch angle and yaw rate, each in [-1, 1], sent at 48 Hz.
+- **Physics:** a NumPy rigid-body quadrotor simulated at 240 Hz.
+- **Crashes:** hitting the ground, leaving the arena, or hitting a gate frame.
+
+## Approach
+
+```mermaid
+flowchart LR
+    A["Expert controller<br/>min-jerk splines + PD tracking"] -->|demonstrations| B["Behavior cloning<br/>supervised warm start"]
+    B -->|initial weights| C["PPO fine-tuning<br/>composite reward"]
+    C --> D["Curriculum<br/>wider starts, then sensor noise"]
+    D -->|evaluation gates promotion| C
+```
+
+**Why this design:**
+
+- **The policy picks racing commands; a controller keeps the drone stable.** The policy outputs attitude and thrust commands, and an inner attitude controller turns them into torques. The network only has to learn how to race the course, not how to keep the drone upright.
+- **Imitation first, then RL.** PPO from random weights spends most of its samples learning not to crash. Behavior cloning from an expert controller gives PPO a policy that can already finish laps, so RL is spent on getting faster.
+- **The curriculum changes difficulty, not track length.** Every level flies the full track. Later levels widen the random start area (0.3 m, then 0.8 m) and then add observation noise. An earlier version shortened the episode instead, which only ever showed the agent the start of the track.
+- **Reward:** +200 per gate, −150 for a crash, plus small terms for progress toward the next gate, speed, smooth actions and elapsed time ([`configs/default.yaml`](configs/default.yaml)).
+
+## Validating the result
+
+Every model is evaluated the same way:
+
+- 100 episodes with a fixed set of random seeds.
+- A random start position for each episode, so they aren't identical replays.
+- The policy picks its best action every step, with no exploration randomness.
+
+Each episode records gates passed, the cause of any crash, lap time, and exactly where the drone crossed each gate's plane. Comparing those against simple baselines (the expert controller, and the behavior-cloned starting policy) caught several problems. Each one made the agent look better or worse than it really was:
+
+![Trajectories of the policy trained with thin gates versus the retrained policy, on the same 100 starts](docs/assets/before_after.png)
+
+| What looked fine | What was actually wrong | Fix |
+|---|---|---|
+| 100/100 laps | Gates were infinitely thin windows, so clipping a frame cost nothing. 95% of the policy's gate crossings were within 0.44 m of center, inside a 0.50 m half-width opening (chart below). | Solid gate frames, classified into clean pass / frame strike / wide miss. The crossing point is interpolated so the drone can't skip through a frame between timesteps (at 5 m/s it moves 0.10 m per step, twice the frame thickness). Tested over 161 offsets: no crossing ever counts as both a pass and a strike. |
+| The curriculum advanced and fell back during training | Evaluation used a fixed start and deterministic dynamics, so all 50 evaluation episodes were the same trajectory. Every curriculum decision was made on one sample. | One shared start-position spread (`DEFAULT_EVAL_PERTURBATION`) used by both training-time and offline evaluation. |
+| The behavior-cloning stage ran without errors | The weights copied from the behavior-cloned network into PPO were effectively noise. There were mismatches in normalization layers, input scaling and initial action noise, and a shape mismatch only printed a warning. | Folded the input normalization exactly into the first layer and made shape mismatches raise an error. The copied policy now matches the original to within 1.7e-7, and laps completed at the start of PPO went from **0/50 to 49/50**. |
+| The expert reported 500/500 successful demonstrations | "Success" meant passing at least one gate. Zero demonstrations completed a lap, so cloning them taught a correctly learned bad teacher. | Success means a completed lap, and only complete runs are used for cloning. |
+| A standard PPO stability setting looked safe (`target_kl`) | In Stable-Baselines3 it stops each update before the optimizer step, which also throws away the critic's update. Starting from a skilled policy, the critic barely learned for 115k steps, and reward collapsed from 888 to −70. | Disabled, with the reason recorded in the config. |
+
+![Distribution of where each policy crosses the gate plane](docs/assets/gate_offsets.png)
+
+The retrained policy crosses gates near the center: 95% of crossings are within 0.29 m, against 0.44 m before. This is visible directly in the crossing data, not just in the lap counts.
+
+The full lab notebook, including dead ends and controller bugs found along the way, is in [`tasks/todo.md`](tasks/todo.md) and [`tasks/lessons.md`](tasks/lessons.md).
+
+## Limitations and next steps
+
+- **Training still oscillates.** Evaluation success swings between checkpoints (83% → 98.5% → 84% → 95.5%), and the reported model is the best checkpoint. The cause is a skilled policy paired with a critic that starts from random weights. Training the critic first is the planned fix.
+- **Two settings changed together.** The retrained run used a lower entropy coefficient and a linear learning-rate schedule, and their effects haven't been measured separately.
+- **Grazing contact isn't detected.** A crash is only checked when the drone crosses a gate's plane, so brushing the outside of a frame while flying alongside it isn't caught.
+- **Simulation only.** The physics is lightweight. There are PyBullet and AirSim environments for higher-fidelity checks, but the results above come from the NumPy simulator. A camera-based gate detector and state estimator are scaffolded but not used in training.
+- **One track.** Results are for `simple_oval`. The figure-eight and competition tracks are defined but not yet benchmarked.
+
+## Reproduce
+
+```bash
+git clone https://github.com/hudsonwhipple/golden_snitch.git && cd golden_snitch
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
+
+python -m pytest tests/ -q                 # 46 tests
+python scripts/make_readme_figures.py      # re-score the committed policies and redraw the figures
+bash scripts/train.sh                      # full pipeline: expert → BC → PPO → curriculum
 ```
 
-Verify installation:
+The PPO stage (2.5M steps) took about 13 minutes on an Apple Silicon laptop. Training flags, resuming runs, running stages individually and TensorBoard/W&B monitoring are covered in [`docs/USAGE.md`](docs/USAGE.md). The PyBullet and AirSim simulators are optional git submodules (`git submodule update --init --recursive`).
 
-```bash
-python -m pytest tests/ -v
-```
+## Repository layout
 
-### Train a Policy
-
-Run the full multi-stage pipeline:
-
-```bash
-bash scripts/train.sh
-```
-
-Override track, device, or timesteps:
-
-```bash
-TRACK=figure_eight TIMESTEPS=5000000 DEVICE=mps bash scripts/train.sh
-```
-
-#### Train Script Flags
-
-| Flag | Description |
-|------|-------------|
-| `--model <name>` | Resume PPO from `saved_models/<name>.zip` (implies `--skip-expert --skip-bc`) |
-| `--model-name <name>` | Name to save the resulting model as (default: `<track>_<timestamp>`) |
-| `--skip-expert` | Skip Stage 1, reuse latest existing expert data |
-| `--skip-bc` | Skip Stage 2, reuse latest existing BC model |
-| `--no-domain-rand` | Disable physics and sensor domain randomization during PPO training |
-| `--track <name>` | Track name (default: `simple_oval`) |
-| `--seed <int>` | Random seed (default: `42`) |
-| `--device <str>` | Torch device: `cpu`, `mps`, or `cuda` (default: `cpu`) |
-
-#### Resume Training
-
-Each completed run saves its best model to `saved_models/`. To continue training from a previous run:
-
-```bash
-# Resume from a saved model (skips expert + BC automatically)
-bash scripts/train.sh --model simple_oval_20260320_162152
-
-# Resume with a custom name for the new checkpoint
-bash scripts/train.sh --model simple_oval_20260320_162152 --model-name simple_oval_v2
-
-# List available saved models
-ls saved_models/*.zip
-```
-
-#### Skip Upstream Stages
-
-If expert data and a BC model already exist, skip the expensive first two stages:
-
-```bash
-bash scripts/train.sh --skip-expert --skip-bc
-```
-
-#### Run Stages Individually
-
-```bash
-# 1. Generate expert demonstrations
-python -m planning.expert_policy --track simple_oval --episodes 500
-
-# 2. Train behavior cloning policy
-python -m learning.training.train_bc --data outputs/expert_data/<run_id>/expert_data.npz
-
-# 3. Fine-tune with PPO
-python -m learning.training.train_ppo \
-    --track simple_oval \
-    --timesteps 5000000 \
-    --bc-model outputs/bc/<run_id>/best_model.pt \
-    --resume saved_models/<name>.zip \          # optional: resume from checkpoint
-    --curriculum-state saved_models/<name>_curriculum.json \  # optional: restore curriculum
-    --no-domain-rand                            # optional: disable domain randomization
-
-# 4. Evaluate
-python -m learning.evaluation.report eval \
-    --model outputs/ppo/<run_id>/best_model.zip \
-    --track simple_oval \
-    --episodes 100 \
-    --output-dir outputs/ppo/<run_id>/eval
-```
-
-### Evaluate a Policy
-
-```bash
-python -m learning.evaluation.report eval \
-    --model outputs/ppo/<run_id>/best_model.zip \
-    --track simple_oval \
-    --episodes 100 \
-    --output-dir outputs/ppo/<run_id>/eval
-```
-
-## Project Structure
-
-```
-golden_snitch/
-├── configs/                    # Configuration files
-│   ├── default.yaml           # Master config (all hyperparameters)
-│   └── tracks/                # Race track definitions
-│       ├── simple_oval.yaml   # 4-gate beginner track
-│       ├── figure_eight.yaml  # 6-gate intermediate track
-│       └── competition.yaml   # 8-gate advanced track
-├── control/                   # Flight controllers
-│   └── pid_controller.py      # Cascaded PID with anti-windup
-├── environments/              # Gymnasium environments
-│   ├── racing_env.py          # Primary training env (lightweight dynamics)
-│   ├── quadrotor_dynamics.py  # Pure numpy quadrotor simulation
-│   ├── pybullet_racing_env.py # High-fidelity env (requires pybullet)
-│   ├── gate_detection.py      # Gate passage detection
-│   ├── reward_functions/      # Composite reward system
-│   ├── tracks/                # Track loading utilities
-│   └── wrappers/              # Observation and curriculum wrappers
-├── learning/                  # ML training infrastructure
-│   ├── policies/              # Neural network architectures
-│   │   └── state_policy.py    # MLP racing policy (256x256)
-│   ├── training/              # Training scripts
-│   │   ├── train_bc.py        # Behavior cloning trainer
-│   │   ├── train_ppo.py       # PPO training with checkpoints
-│   │   └── curriculum.py      # Curriculum level manager
-│   ├── evaluation/            # Eval and reporting
-│   │   ├── evaluate.py        # Evaluation harness
-│   │   ├── metrics.py         # Racing metrics computation
-│   │   └── report.py          # Report generation + comparison
-│   └── utils/                 # Model I/O helpers
-├── planning/                  # Classical planning
-│   ├── trajectory_generator.py # Min-jerk spline trajectories
-│   └── expert_policy.py       # Expert data generation
-├── utils/                     # Shared utilities
-│   ├── config.py              # YAML config loader
-│   ├── math_utils.py          # Quaternion/rotation helpers
-│   ├── tracking.py            # W&B + TensorBoard helpers
-│   └── visualization.py       # Matplotlib plot utilities
-├── tests/                     # Unit tests
-├── docs/                      # Documentation
-│   ├── ARCHITECTURE.md        # System architecture details
-│   └── TRAINING_GUIDE.md      # Step-by-step training guide
-├── scripts/                   # Shell scripts
-│   ├── train.sh               # Full pipeline orchestration
-│   └── replay_trajectory.py   # Trajectory visualization
-├── saved_models/              # Named model checkpoints for resuming (gitignored)
-└── outputs/                   # Training artifacts (gitignored)
-```
-
-## Training Pipeline
-
-```
-Expert Trajectories → Behavior Cloning → PPO Fine-Tuning → Curriculum Learning
-     (Stage 1)           (Stage 2)          (Stage 3)          (Stage 4)
-```
-
-**Stage 1** generates optimal trajectories through gates using minimum-jerk splines tracked by a PD controller.
-
-**Stage 2** trains a neural network to imitate the expert via supervised learning (MSE loss on actions).
-
-**Stage 3** initializes PPO from BC weights and optimizes the policy via reinforcement learning with a composite reward function.
-
-**Stage 4** progressively increases difficulty: single gate → full track → added noise.
-
-## Tracks
-
-| Track | Gates | Description |
-|-------|-------|-------------|
-| simple_oval | 4 | Oval layout, constant altitude |
-| figure_eight | 6 | Crossing paths, altitude changes |
-| competition | 8 | Complex layout with tight turns |
-
-## Configuration
-
-All hyperparameters live in `configs/default.yaml`. Key sections:
-
-- `env`: Track, physics/policy rates, parallel envs
-- `reward`: Gate bonus, collision penalty, component weights
-- `ppo`: Learning rate, batch size, clip range, entropy coefficient
-- `curriculum`: Level definitions, promotion/demotion thresholds
-
-## Compute Requirements
-
-Designed for laptop-class compute (Apple Silicon M5pro):
-
-| Stage | Duration | Memory |
-|-------|----------|--------|
-| Expert data (500 episodes) | ~30 min | 2 GB |
-| Behavior cloning (50 epochs) | ~10 min | 1 GB |
-| PPO (5M steps, 4 envs) | ~2-3 hrs | 4 GB |
-
-## Monitoring
-
-Training metrics are logged to TensorBoard:
-
-```bash
-tensorboard --logdir outputs/ppo/<run_id>/tb_logs
-```
-
-Optional W&B support:
-
-```bash
-pip install wandb && wandb login
-```
-
-## Tests
-
-```bash
-python -m pytest tests/ -v
-```
-
-Tests cover: gate detection, reward function, PID controller, track loading.
-
-## Documentation
-
-- [Architecture](docs/ARCHITECTURE.md) - System design and component breakdown
-- [Training Guide](docs/TRAINING_GUIDE.md) - Detailed training instructions
+| Path | What's there |
+|---|---|
+| [`environments/`](environments) | Gymnasium environments, quadrotor dynamics, gate geometry and collision, reward, curriculum and randomization wrappers |
+| [`planning/`](planning) | Minimum-jerk trajectory generator and the expert controller used for demonstrations |
+| [`learning/`](learning) | Behavior cloning, PPO training, curriculum manager, evaluation harness and metrics |
+| [`control/`](control) | Cascaded PID controller |
+| [`configs/`](configs) | All hyperparameters (`default.yaml`) and track definitions |
+| [`models/`](models) | The two policies compared above |
+| [`scripts/`](scripts) | Training pipeline and the script that regenerates this README's results |
+| [`tests/`](tests) | Gate detection, reward, PID and environment tests |
+| [`docs/`](docs) | [Architecture](docs/ARCHITECTURE.md), [training guide](docs/TRAINING_GUIDE.md), [usage](docs/USAGE.md) |
 
 ## License
 
-MIT License - see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

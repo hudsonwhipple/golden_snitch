@@ -1,0 +1,44 @@
+{
+  "perturbation_m": 0.3,
+  "seed": 2000,
+  "solid_gates": {
+    "before": {
+      "episodes": 100,
+      "laps_completed": 67,
+      "gate_success_rate": 0.815,
+      "mean_lap_time_s": 3.7024253731343277,
+      "gate_frame_strikes": 33,
+      "other_crashes": 0,
+      "crossing_offset_p95_m": 0.4436958571073578
+    },
+    "after": {
+      "episodes": 100,
+      "laps_completed": 100,
+      "gate_success_rate": 1.0,
+      "mean_lap_time_s": 3.8622916666666662,
+      "gate_frame_strikes": 0,
+      "other_crashes": 0,
+      "crossing_offset_p95_m": 0.28775043469089134
+    }
+  },
+  "thin_gates": {
+    "before": {
+      "episodes": 100,
+      "laps_completed": 100,
+      "gate_success_rate": 1.0,
+      "mean_lap_time_s": 3.7106250000000007,
+      "gate_frame_strikes": 0,
+      "other_crashes": 0,
+      "crossing_offset_p95_m": 0.44350027531739655
+    },
+    "after": {
+      "episodes": 100,
+      "laps_completed": 100,
+      "gate_success_rate": 1.0,
+      "mean_lap_time_s": 3.8622916666666662,
+      "gate_frame_strikes": 0,
+      "other_crashes": 0,
+      "crossing_offset_p95_m": 0.28775043469089134
+    }
+  }
+}
